@@ -1,2 +1,2 @@
 # solar-punk
-Solar punking to the max
+Solarpunk-maxxing :0
