@@ -43,10 +43,16 @@ Relevant files:
 
 ### Endstop / homing strategy
 
-- Because each motor has its own driver, they can be **homed independently**: send steps to
-  motor A only until its endstop triggers, then motor B only until its endstop triggers. This
-  fully corrects any accumulated drift/desync between the two screws every homing cycle,
-  regardless of skipped steps or friction differences — no need for simultaneous/matched sensing.
+- Both motors are rigidly connected to the same platform, so they must move **simultaneously**,
+  not one at a time — moving only one motor racks the frame against the other, fixed side.
+  Originally planned as fully sequential (motor A homes completely, then motor B) since each
+  motor has its own driver and can technically be homed independently; corrected 2026-08-14
+  after realizing that racks the platform in this build. RAISE now steps both motors together
+  every iteration, each one independently stopping the instant its own endstop triggers (so a
+  motor that's already home just idles while the other catches up) — this still self-corrects
+  drift between the two screws every homing cycle, but bounds any skew during homing to
+  whatever drift already existed rather than one motor's entire travel distance. LOWER already
+  moved both motors together in lockstep.
 - Minimum viable setup: **2 endstops, one per motor, both at the top.** Home upward on each motor
   independently to re-zero; "lowered" position is reached via a software-defined step count
   downward from that zero (no bottom endstop required — over-travel downward is less
@@ -65,7 +71,42 @@ Relevant files:
 
 Parts arrived and wired as of 2026-08-14 (motors + endstops connected to BTT Pico, one endstop
 per motor). Firmware (`platform/firmware/main.py`) and host script (`platform/host/lift_control.py`)
-written 2026-08-14, not yet tested against real hardware. Before running: fill in the real BTT
-Pico pin numbers, flash the firmware via BOOTSEL/UF2 over USB, then verify DIR polarity and
-endstop trigger polarity with the motors disconnected from the lead screws (or at very low
-speed) before trusting RAISE/LOWER at full travel.
+written 2026-08-14. Pin numbers verified against a real Klipper config for the same board
+(SKR/BTT Pico). Endstop polarity confirmed active-high (an earlier "always high" reading turned
+out to be a flipped JST wire, not a real polarity difference). Motor B's driver output moved
+from the Y header to the Z header 2026-08-14 (Y driver output suspected dead) -- its endstop
+stays on the Y endstop header, which is separately confirmed working. DIR polarity for motor B
+not yet confirmed working after that swap.
+
+There's also `platform/host/lift_gui.py` -- a tkinter GUI with RAISE/LOWER/STOP/STATUS buttons,
+a Jog panel (A/B, up/down, `JOG_STEPS` from firmware -- small bounded move that ignores
+endstops, for bench-testing DIR polarity without risking a full RAISE/LOWER), and a Reset Board
+button (see below). Run with `python3 lift_gui.py` from `platform/host/` (venv active).
+
+#### Flashing/updating the firmware
+
+One-time setup (creates a venv so nothing installs system-wide):
+```
+cd platform  # or repo root, adjust paths below accordingly
+python3 -m venv .venv
+source .venv/bin/activate
+pip install mpremote pyserial
+```
+
+Every time `platform/firmware/main.py` changes:
+```
+source .venv/bin/activate
+mpremote connect /dev/ttyACM0 fs cp platform/firmware/main.py :main.py
+```
+then reset the board so it actually runs the new code -- use the **Reset Board** button in
+`lift_gui.py`, or manually send Ctrl-B (exit raw REPL) then Ctrl-D (soft reset) over the serial
+connection. A plain `mpremote reset` is unreliable: MicroPython deliberately skips auto-running
+`main.py` after a soft-reset performed while in raw-REPL mode (which is the mode mpremote's own
+`reset`/`exec` subcommands leave the board in), so the board can appear to hang/not respond to
+RAISE/LOWER/etc. after using `mpremote exec` for debugging -- that's this issue, not a hardware
+fault, if it happens again.
+
+Initial MicroPython install (only needed once, or after erasing the board): hold BOOTSEL, plug
+in USB, board mounts as a `RPI-RP2` drive -- drag on a `.uf2` from
+https://micropython.org/download/RPI_PICO/ (the generic RP2040 build works fine for the
+BTT/SKR Pico), board reboots automatically into MicroPython.
