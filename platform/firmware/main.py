@@ -79,8 +79,12 @@ RATIO_B = MICROSTEP_B // MICROSTEP_A  # B pulses per A pulse for equal travel
 RAISE_PULSE_US = 800         # time high and time low per step while homing up
 LOWER_PULSE_US = 400         # while lowering (currently 2x the raise speed)
 JOG_PULSE_US = 800           # bench-test jogs
-RAISE_MAX_STEPS = 200000     # pure safety cap (broken endstop/wiring) -- RAISE
-                             # normally ends only when both endstops trigger
+RAISE_MAX_STEPS = 25000      # RAISE ends at the endstops OR this step cap,
+                             # whichever comes first (cap-without-endstops
+                             # reports ERROR HOMING_FAILED, which parks the
+                             # GUI automation). Kept tight, not a huge
+                             # last-resort number, because the rig runs
+                             # unattended for weeks at a time.
 JOG_STEPS = 50                # small bench-test move, ignores endstops entirely
 
 # ---------------------------------------------------------------------------
@@ -151,8 +155,8 @@ def home_both():
     each motor's steps so LOWER can replay them. Both motors are rigidly
     connected to the same platform, so homing them fully sequentially (one
     at a time) would rack the frame -- this keeps any skew during homing
-    bounded to whatever drift already existed. RAISE_MAX_STEPS is a pure
-    safety cap for a broken endstop, not a working travel limit.
+    bounded to whatever drift already existed. Motion is bounded by
+    RAISE_MAX_STEPS: endstop OR step cap, whichever comes first.
 
     Returns (a_done, b_done, count_a, count_b)."""
     dir_a.value(DIR_UP_A)

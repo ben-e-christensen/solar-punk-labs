@@ -122,7 +122,11 @@ Operating workflow (all in `lift_gui.py`):
 - Step counts live in Pico RAM (`raise_steps_a/b`, per motor since each stops on its own
   endstop); every raise re-measures them, and a power cycle just needs BEGIN again. Replies
   carry them: `OK RAISED A=<n> B=<n>` / `OK LOWERED ...`; `STATUS` -> `HOMED A=.. B=..`.
-  `RAISE_MAX_STEPS` (200000) is a pure broken-endstop safety cap, not a travel limit.
+  `RAISE_MAX_STEPS` (25000) bounds every raise: endstop OR step cap, whichever first
+  (tightened back from a 200k last-resort cap 2026-08-14 because the rig runs unattended for
+  ~6 weeks; cap-without-endstops = ERROR HOMING_FAILED, which disarms the automation so a
+  failed endstop parks the system instead of cycling blind). LOWER replays the counted raise
+  steps, so it is inherently bounded by the same cap.
 - Sampling: 100 Hz (`SAMPLE_HZ`) from a dedicated thread per motion segment;
   `charge_sensors.ContinuousSampler` puts the ADS1115s in continuous-conversion mode (860 SPS
   internally) so each sample is one register read per sensor. Drops to 1 Hz when no sensor is
