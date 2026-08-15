@@ -73,10 +73,16 @@ Parts arrived and wired as of 2026-08-14 (motors + endstops connected to BTT Pic
 per motor). Firmware (`platform/firmware/main.py`) and host script (`platform/host/lift_control.py`)
 written 2026-08-14. Pin numbers verified against a real Klipper config for the same board
 (SKR/BTT Pico). Endstop polarity confirmed active-high (an earlier "always high" reading turned
-out to be a flipped JST wire, not a real polarity difference). Motor B's driver output moved
-from the Y header to the Z header 2026-08-14 (Y driver output suspected dead) -- its endstop
-stays on the Y endstop header, which is separately confirmed working. DIR polarity for motor B
-not yet confirmed working after that swap.
+out to be a flipped JST wire, not a real polarity difference). Motor B is back on the Y header
+(endstop also on Y). The "out of step" X-vs-Y mismatch (and the earlier "Y port dead"
+suspicion) was diagnosed 2026-08-14: the SKR Pico's TMC2209s run in standalone mode under this
+firmware (nothing configures them over UART), so each port's microstep resolution comes from
+its hardwired MS1/MS2 straps, which differ per port because they double as Klipper UART
+address pins -- X=8, Y=32, Z=64, E=16 microsteps per full step. A STEP pulse on Y moves 1/4
+the distance of one on X. The firmware now compensates: all step counts are in motor-A (X,
+8-microstep) units and motor B gets RATIO_B (=4) pulses at 4x the pulse rate per unit, so
+distances and wall-clock speeds match. If a motor changes ports, update MICROSTEP_A/_B at the
+top of the firmware. DIR polarity for motor B not yet re-confirmed since returning to Y.
 
 There's also `platform/host/lift_gui.py` -- a tkinter GUI with RAISE/LOWER/STOP/STATUS buttons,
 a Jog panel (A/B, up/down, `JOG_STEPS` from firmware -- small bounded move that ignores
