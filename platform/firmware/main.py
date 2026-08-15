@@ -194,7 +194,10 @@ def cmd_lower():
         return
     stop_requested = False
     drivers_enable()
-    completed = lower_both(LOWER_STEPS, not DIR_UP_A, not DIR_UP_B)
+    # lower_both() inverts internally (it takes the UP levels and sets the
+    # opposite), so pass DIR_UP_* as-is -- passing `not DIR_UP_*` here
+    # double-inverted and made LOWER move upward.
+    completed = lower_both(LOWER_STEPS, DIR_UP_A, DIR_UP_B)
     if completed:
         print("OK LOWERED")
     elif stop_requested:
