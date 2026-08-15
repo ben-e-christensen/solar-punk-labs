@@ -149,6 +149,11 @@ Operating workflow (all in `lift_gui.py`):
 - `lift_control.py` serial timeout raised 60s -> 180s: a full-travel RAISE (~80s) outlived the
   old timeout, which silently desynced replies for every later command.
 
+- **BEGIN STRESS TEST** (GUI button): mechanical soak test while the rest of the build
+  continues -- homes up like BEGIN, then runs lower+raise cycles back-to-back (1 s pause
+  between cycles) until STOP or a motion error. Purely host-side (reuses the BEGIN/CYCLE
+  state machine, no firmware changes); each segment still saves CSV/PNG like a normal cycle.
+
 There's also `platform/host/lift_gui.py` -- a tkinter GUI with RAISE/LOWER/STOP/STATUS buttons,
 a Jog panel (A/B, up/down, `JOG_STEPS` from firmware -- small bounded move that ignores
 endstops, for bench-testing DIR polarity without risking a full RAISE/LOWER), and a Reset Board

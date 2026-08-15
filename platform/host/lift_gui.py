@@ -9,6 +9,9 @@ Workflow (see CLAUDE.md):
     minutes once BEGIN has completed; the button also fires one on demand.
   - STOP: aborts any motion immediately and cancels the automation
     (click BEGIN to re-home and restart it).
+  - BEGIN STRESS TEST: mechanical soak test -- homes up like BEGIN, then
+    runs lower+raise cycles back-to-back (1 s pause between) until STOP
+    or a motion error. Each segment still saves CSV/PNG data as usual.
 
 Charge data (two ADS1115 electrometer channels, "roots" and
 "grounded_roots") is sampled ONLY while the platform is moving, at
@@ -63,8 +66,10 @@ class LiftGUI:
         self.result_queue = queue.Queue()
         self.busy = False
         self.moving = False            # a RAISE/LOWER is in flight
-        self.cycle_phase = None        # None | "lower" | "raise"
+        self.cycle_phase = None        # None | "begin" | "lower" | "raise"
         self.auto_after_id = None
+        self.stress = False            # stress test: back-to-back cycles until STOP
+        self.stress_cycles = 0
         self.segment_name = None       # "raise" / "lower" while moving
         self.segment_samples = []      # (elapsed_s, wall_time, {name: value})
         self.segment_start = None
@@ -91,43 +96,47 @@ class LiftGUI:
         self.stop_btn = ttk.Button(main, text="STOP", command=self.stop_pressed)
         self.stop_btn.grid(row=2, column=2, sticky="ew", padx=2, pady=2)
 
-        ttk.Separator(main).grid(row=3, column=0, columnspan=3, sticky="ew", pady=8)
+        self.stress_btn = ttk.Button(main, text="BEGIN STRESS TEST", command=self.stress_pressed)
+        self.stress_btn.grid(row=3, column=0, columnspan=3, sticky="ew", padx=2, pady=2)
+
+        ttk.Separator(main).grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
 
         ttk.Label(main, text="Jog (small move, ignores endstops -- for checking DIR polarity)").grid(
-            row=4, column=0, columnspan=3, sticky="w"
+            row=5, column=0, columnspan=3, sticky="w"
         )
         self.jog_a_up_btn = ttk.Button(main, text="A ▲", command=lambda: self.run_command("JOG_A_UP"))
-        self.jog_a_up_btn.grid(row=5, column=0, sticky="ew", padx=2, pady=2)
+        self.jog_a_up_btn.grid(row=6, column=0, sticky="ew", padx=2, pady=2)
         self.jog_a_down_btn = ttk.Button(main, text="A ▼", command=lambda: self.run_command("JOG_A_DOWN"))
-        self.jog_a_down_btn.grid(row=6, column=0, sticky="ew", padx=2, pady=2)
+        self.jog_a_down_btn.grid(row=7, column=0, sticky="ew", padx=2, pady=2)
         self.jog_b_up_btn = ttk.Button(main, text="B ▲", command=lambda: self.run_command("JOG_B_UP"))
-        self.jog_b_up_btn.grid(row=5, column=1, sticky="ew", padx=2, pady=2)
+        self.jog_b_up_btn.grid(row=6, column=1, sticky="ew", padx=2, pady=2)
         self.jog_b_down_btn = ttk.Button(main, text="B ▼", command=lambda: self.run_command("JOG_B_DOWN"))
-        self.jog_b_down_btn.grid(row=6, column=1, sticky="ew", padx=2, pady=2)
+        self.jog_b_down_btn.grid(row=7, column=1, sticky="ew", padx=2, pady=2)
 
-        ttk.Separator(main).grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
+        ttk.Separator(main).grid(row=8, column=0, columnspan=3, sticky="ew", pady=8)
 
         ttk.Label(main, text="Charge sensors (live only while platform is moving)").grid(
-            row=8, column=0, columnspan=3, sticky="w"
+            row=9, column=0, columnspan=3, sticky="w"
         )
         self.sensor_var = tk.StringVar(value="platform idle")
         ttk.Label(main, textvariable=self.sensor_var, font=("Courier", 11)).grid(
-            row=9, column=0, columnspan=3, sticky="w", padx=2, pady=(0, 4)
+            row=10, column=0, columnspan=3, sticky="w", padx=2, pady=(0, 4)
         )
 
-        ttk.Separator(main).grid(row=10, column=0, columnspan=3, sticky="ew", pady=8)
+        ttk.Separator(main).grid(row=11, column=0, columnspan=3, sticky="ew", pady=8)
 
         self.reset_btn = ttk.Button(main, text="Reset Board (fix stuck/unresponsive)", command=self.reset_board)
-        self.reset_btn.grid(row=11, column=0, columnspan=3, sticky="ew", padx=2, pady=2)
+        self.reset_btn.grid(row=12, column=0, columnspan=3, sticky="ew", padx=2, pady=2)
 
         self.log = tk.Text(main, width=58, height=14, state="disabled")
-        self.log.grid(row=12, column=0, columnspan=3, sticky="nsew", pady=(10, 0))
+        self.log.grid(row=13, column=0, columnspan=3, sticky="nsew", pady=(10, 0))
 
         # STOP is intentionally NOT in this list: it must stay clickable
         # while a RAISE/LOWER is in flight, or it can't abort anything.
         self.buttons = [
             self.begin_btn,
             self.cycle_btn,
+            self.stress_btn,
             self.jog_a_up_btn,
             self.jog_a_down_btn,
             self.jog_b_up_btn,
@@ -186,12 +195,29 @@ class LiftGUI:
     def cycle_pressed(self):
         self.start_cycle(manual=True)
 
+    def stress_pressed(self):
+        """Mechanical stress test: home up (like BEGIN), then run lower+raise
+        cycles back-to-back until STOP or a motion error."""
+        if self.busy:
+            return
+        self.cancel_auto_cycle()
+        self.stress = True
+        self.stress_cycles = 0
+        self.auto_var.set("Stress test: homing raise...")
+        self.log_line("stress test: starting with homing raise")
+        self.cycle_phase = "begin"
+        self.run_command("RAISE")
+
     def start_cycle(self, manual=False):
         if self.busy:
             if not manual:
-                # Auto-fire collided with something in progress; retry soon.
-                self.log_line("auto-cycle deferred (busy), retrying in 60s")
-                self.schedule_auto_cycle(delay_ms=60 * 1000)
+                if self.stress:
+                    # STATUS poll etc. in the way; retry quickly.
+                    self.schedule_next_stress_cycle(delay_ms=2000)
+                else:
+                    # Auto-fire collided with something in progress; retry soon.
+                    self.log_line("auto-cycle deferred (busy), retrying in 60s")
+                    self.schedule_auto_cycle(delay_ms=60 * 1000)
             return
         self.cancel_auto_cycle()
         self.cycle_phase = "lower"
@@ -200,6 +226,9 @@ class LiftGUI:
 
     def stop_pressed(self):
         self.cancel_auto_cycle()
+        if self.stress:
+            self.log_line(f"stress test stopped after {self.stress_cycles} full cycle(s)")
+        self.stress = False
         self.auto_var.set("Automation: off (click BEGIN)")
         self.cycle_phase = None
         if not self.moving:
@@ -259,6 +288,13 @@ class LiftGUI:
         if self.auto_after_id is not None:
             self.root.after_cancel(self.auto_after_id)
             self.auto_after_id = None
+
+    def schedule_next_stress_cycle(self, delay_ms=1000):
+        """Brief pause between stress cycles so replies/logs stay legible and
+        the motors get a beat between direction reversals."""
+        self.cancel_auto_cycle()
+        self.auto_after_id = self.root.after(delay_ms, self.start_cycle)
+        self.auto_var.set(f"Stress test: running ({self.stress_cycles} cycle(s) done) -- STOP to end")
 
     # --------------------------------------------------------- data capture
 
@@ -414,9 +450,14 @@ class LiftGUI:
         if phase == "begin" and command == "RAISE":
             self.cycle_phase = None
             if ok:
-                self.log_line("BEGIN complete -- automation armed")
-                self.schedule_auto_cycle()
+                if self.stress:
+                    self.log_line("stress test: homed, cycling until STOP")
+                    self.schedule_next_stress_cycle()
+                else:
+                    self.log_line("BEGIN complete -- automation armed")
+                    self.schedule_auto_cycle()
             else:
+                self.stress = False
                 self.auto_var.set("Automation: off (BEGIN failed -- fix and retry)")
         elif phase == "lower" and command == "LOWER":
             if ok:
@@ -425,13 +466,20 @@ class LiftGUI:
                 self.run_command("RAISE")
             else:
                 self.cycle_phase = None
+                self.stress = False
                 self.auto_var.set("Automation: off (cycle failed -- click BEGIN to restart)")
         elif phase == "raise" and command == "RAISE":
             self.cycle_phase = None
             if ok:
-                self.log_line("cycle complete")
-                self.schedule_auto_cycle()
+                if self.stress:
+                    self.stress_cycles += 1
+                    self.log_line(f"stress cycle {self.stress_cycles} complete")
+                    self.schedule_next_stress_cycle()
+                else:
+                    self.log_line("cycle complete")
+                    self.schedule_auto_cycle()
             else:
+                self.stress = False
                 self.auto_var.set("Automation: off (cycle failed -- click BEGIN to restart)")
 
 
