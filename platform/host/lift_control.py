@@ -29,8 +29,8 @@ def send_command(command):
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1].upper() not in ("RAISE", "LOWER", "STOP", "STATUS"):
-        print(f"Usage: {sys.argv[0]} raise|lower|stop|status")
+    if len(sys.argv) != 2 or sys.argv[1].upper() not in ("RAISE", "LOWER", "LOWER_FULL", "STOP", "STATUS"):
+        print(f"Usage: {sys.argv[0]} raise|lower|lower_full|stop|status")
         sys.exit(1)
 
     command = sys.argv[1].upper()

@@ -151,8 +151,16 @@ Operating workflow (all in `lift_gui.py`):
 
 - **BEGIN STRESS TEST** (GUI button): mechanical soak test while the rest of the build
   continues -- homes up like BEGIN, then runs lower+raise cycles back-to-back (1 s pause
-  between cycles) until STOP or a motion error. Purely host-side (reuses the BEGIN/CYCLE
-  state machine, no firmware changes); each segment still saves CSV/PNG like a normal cycle.
+  between cycles) until STOP or a motion error. Reuses the BEGIN/CYCLE state machine, but
+  its lower leg sends `LOWER_FULL` (fixed count), NOT the counted-steps `LOWER` -- the
+  first version used `LOWER` and visibly did nothing when the test was started with the
+  platform already at the top (homing raise counted ~0 steps, so every cycle replayed ~0).
+  Each segment still saves CSV/PNG like a normal cycle.
+- **LOWER_FULL** (firmware command + GUI "LOWER FULL" button, added 2026-08-15): lowers
+  both motors by `FULL_LOWER_STEPS` (25000, tune to just under a real full-travel raise
+  count) regardless of homed state -- recovery move so a desynced platform can be sent
+  down without hand-cranking or power-cycling. Over-travel downward just skips steps and
+  the next RAISE re-homes. Requires reflashing the firmware.
 
 There's also `platform/host/lift_gui.py` -- a tkinter GUI with RAISE/LOWER/STOP/STATUS buttons,
 a Jog panel (A/B, up/down, `JOG_STEPS` from firmware -- small bounded move that ignores

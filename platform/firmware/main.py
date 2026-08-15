@@ -7,6 +7,9 @@ Listens for line-delimited commands over USB serial (stdin/stdout):
               counting each motor's steps; replies OK RAISED A=<n> B=<n>
     LOWER   - replay the last RAISE's per-motor counts back downward, so
               the platform returns to where that raise started
+    LOWER_FULL - lower both motors by the fixed FULL_LOWER_STEPS count,
+              regardless of homed state -- recovery/stress-test move so the
+              platform can be sent down without hand-cranking
     STOP    - abort whatever RAISE/LOWER is in progress
     STATUS  - report homed state and current position
     JOG_A_UP / JOG_A_DOWN / JOG_B_UP / JOG_B_DOWN
@@ -86,6 +89,13 @@ RAISE_MAX_STEPS = 25000      # RAISE ends at the endstops OR this step cap,
                              # last-resort number, because the rig runs
                              # unattended for weeks at a time.
 JOG_STEPS = 50                # small bench-test move, ignores endstops entirely
+FULL_LOWER_STEPS = 25000     # LOWER_FULL travel. Tune to just UNDER a real
+                             # full-travel raise count (read A=<n> off an
+                             # OK RAISED reply after raising from the bottom):
+                             # over-travel downward just stalls the motors
+                             # (skipped steps, no crash) and the next RAISE
+                             # re-homes to the endstops anyway, but grinding
+                             # the bottom every stress cycle is worth avoiding.
 
 # ---------------------------------------------------------------------------
 
@@ -236,6 +246,24 @@ def cmd_lower():
         print("ERROR LOWER_FAILED")
 
 
+def cmd_lower_full():
+    """Fixed-count lower, no homed-state requirement: for getting the
+    platform back down after an error/desync without hand-cranking, and for
+    the GUI stress test's lower leg (which must not depend on the counted
+    raise steps -- those are ~0 if the raise started at the top)."""
+    global homed, stop_requested
+    stop_requested = False
+    drivers_enable()
+    completed = lower_both(FULL_LOWER_STEPS, FULL_LOWER_STEPS)
+    homed = False
+    if completed:
+        print("OK LOWERED_FULL {}".format(FULL_LOWER_STEPS))
+    elif stop_requested:
+        print("OK STOPPED")
+    else:
+        print("ERROR LOWER_FAILED")
+
+
 def cmd_status():
     if homed:
         print("HOMED A={} B={}".format(raise_steps_a, raise_steps_b))
@@ -271,6 +299,8 @@ def main():
             cmd_raise()
         elif cmd == "LOWER":
             cmd_lower()
+        elif cmd == "LOWER_FULL":
+            cmd_lower_full()
         elif cmd == "STOP":
             print("OK IDLE")  # nothing running; STOP mid-motion is handled inline
         elif cmd == "STATUS":

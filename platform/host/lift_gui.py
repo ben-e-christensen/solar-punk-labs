@@ -11,7 +11,13 @@ Workflow (see CLAUDE.md):
     (click BEGIN to re-home and restart it).
   - BEGIN STRESS TEST: mechanical soak test -- homes up like BEGIN, then
     runs lower+raise cycles back-to-back (1 s pause between) until STOP
-    or a motion error. Each segment still saves CSV/PNG data as usual.
+    or a motion error. The lower leg uses LOWER_FULL (fixed step count),
+    not the counted raise steps, so it works even when the test starts
+    with the platform already at the top. Each segment still saves
+    CSV/PNG data as usual.
+  - LOWER FULL: lower by the firmware's fixed FULL_LOWER_STEPS count,
+    regardless of homed state -- recovery move so a desynced platform can
+    be sent down without hand-cranking or power-cycling.
 
 Charge data (two ADS1115 electrometer channels, "roots" and
 "grounded_roots") is sampled ONLY while the platform is moving, at
@@ -97,7 +103,11 @@ class LiftGUI:
         self.stop_btn.grid(row=2, column=2, sticky="ew", padx=2, pady=2)
 
         self.stress_btn = ttk.Button(main, text="BEGIN STRESS TEST", command=self.stress_pressed)
-        self.stress_btn.grid(row=3, column=0, columnspan=3, sticky="ew", padx=2, pady=2)
+        self.stress_btn.grid(row=3, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
+        self.lower_full_btn = ttk.Button(
+            main, text="LOWER FULL", command=lambda: self.run_command("LOWER_FULL")
+        )
+        self.lower_full_btn.grid(row=3, column=2, sticky="ew", padx=2, pady=2)
 
         ttk.Separator(main).grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
 
@@ -137,6 +147,7 @@ class LiftGUI:
             self.begin_btn,
             self.cycle_btn,
             self.stress_btn,
+            self.lower_full_btn,
             self.jog_a_up_btn,
             self.jog_a_down_btn,
             self.jog_b_up_btn,
@@ -170,8 +181,8 @@ class LiftGUI:
         if self.busy:
             return
         self.set_busy(True)
-        if command in ("RAISE", "LOWER"):
-            self.start_segment(command.lower())
+        if command in ("RAISE", "LOWER", "LOWER_FULL"):
+            self.start_segment("raise" if command == "RAISE" else "lower")
         self.log_line(f"> {command}")
 
         def worker():
@@ -222,7 +233,11 @@ class LiftGUI:
         self.cancel_auto_cycle()
         self.cycle_phase = "lower"
         self.log_line("cycle: lowering...")
-        self.run_command("LOWER")
+        # Stress cycles lower by the fixed FULL_LOWER_STEPS count instead of
+        # replaying the counted raise steps -- the counts are ~0 if the
+        # stress test's homing raise started with the platform already up,
+        # which made the whole cycle a visible no-op.
+        self.run_command("LOWER_FULL" if self.stress else "LOWER")
 
     def stop_pressed(self):
         self.cancel_auto_cycle()
@@ -426,9 +441,9 @@ class LiftGUI:
             while True:
                 command, reply = self.result_queue.get_nowait()
                 self.log_line(f"< {reply}")
-                if command in ("RAISE", "LOWER"):
+                if command in ("RAISE", "LOWER", "LOWER_FULL"):
                     self.finish_segment()
-                if command in ("STATUS", "RAISE", "LOWER"):
+                if command in ("STATUS", "RAISE", "LOWER", "LOWER_FULL"):
                     if "HOMED" in reply and "NOT_HOMED" not in reply:
                         self.status_var.set("Status: HOMED (raised)")
                     elif "NOT_HOMED" in reply:
@@ -459,7 +474,7 @@ class LiftGUI:
             else:
                 self.stress = False
                 self.auto_var.set("Automation: off (BEGIN failed -- fix and retry)")
-        elif phase == "lower" and command == "LOWER":
+        elif phase == "lower" and command in ("LOWER", "LOWER_FULL"):
             if ok:
                 self.cycle_phase = "raise"
                 self.log_line("cycle: raising...")
