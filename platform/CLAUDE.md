@@ -79,10 +79,30 @@ suspicion) was diagnosed 2026-08-14: the SKR Pico's TMC2209s run in standalone m
 firmware (nothing configures them over UART), so each port's microstep resolution comes from
 its hardwired MS1/MS2 straps, which differ per port because they double as Klipper UART
 address pins -- X=8, Y=32, Z=64, E=16 microsteps per full step. A STEP pulse on Y moves 1/4
-the distance of one on X. The firmware now compensates: all step counts are in motor-A (X,
-8-microstep) units and motor B gets RATIO_B (=4) pulses at 4x the pulse rate per unit, so
+the distance of one on X. The firmware compensates: all step counts are in motor-A (X,
+8-microstep) units and motor B gets RATIO_B pulses at RATIO_B x the pulse rate per unit, so
 distances and wall-clock speeds match. If a motor changes ports, update MICROSTEP_A/_B at the
-top of the firmware. DIR polarity for motor B not yet re-confirmed since returning to Y.
+top of the firmware.
+
+Later on 2026-08-14 the Y driver output was judged dead for real (with drivers idle-enabled,
+motor A's screw locks but motor B spins freely -- no coil current; cross-check by moving B's
+cable to the X header, POWER OFF FIRST, still pending). Motor B moved to the **E0 port**
+(step gpio14, dir gpio13, en gpio15, MICROSTEP_B=16 so RATIO_B=2); its endstop stays on the Y
+endstop header. Never plug/unplug a stepper cable with VIN applied -- hot-disconnecting a coil
+is the classic TMC2209 killer and likely what took out Y (Z's health unknown, same risk
+exposure). DIR polarity for motor B not yet re-confirmed on E0.
+
+Next bench session (pending as of 2026-08-14, firmware already edited for E0 but not yet
+flashed):
+1. Power everything off (USB + motor VIN).
+2. Optional cross-check: motor B's cable into the X header, power on -- screw locks means Y
+   driver truly dead (proceed); still free means cable/motor is the real fault and E0 won't fix
+   it (revert firmware pins to Y and debug the cable instead).
+3. Motor B cable into E0, power on, flash firmware (`mpremote ... fs cp ... :main.py`), Reset
+   Board via GUI.
+4. `JOG_B_UP`: confirm screw locks, then same distance/direction as `JOG_A_UP`. Wrong
+   direction -> flip `DIR_UP_B` to 0.
+If E0 ever dies too, Z is the last spare output: MICROSTEP_B = 64 (RATIO_B becomes 8).
 
 There's also `platform/host/lift_gui.py` -- a tkinter GUI with RAISE/LOWER/STOP/STATUS buttons,
 a Jog panel (A/B, up/down, `JOG_STEPS` from firmware -- small bounded move that ignores

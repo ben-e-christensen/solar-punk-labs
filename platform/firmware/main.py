@@ -34,9 +34,9 @@ DIR_A_PIN = 10
 EN_A_PIN = 12
 ENDSTOP_A_PIN = 4
 
-STEP_B_PIN = 6  # Y port. NOTE: Y's hardwired standalone microstepping (32) differs
-DIR_B_PIN = 5   # from X's (8) -- see MICROSTEP config below, which compensates.
-EN_B_PIN = 7    # If B moves to another port, update MICROSTEP_B (X=8 Y=32 Z=64 E=16).
+STEP_B_PIN = 14  # E0 port -- Y driver output confirmed-ish dead 2026-08-14 (motor spins
+DIR_B_PIN = 13   # freely at idle while A holds). Ports have different hardwired standalone
+EN_B_PIN = 15    # microstepping (X=8 Y=32 Z=64 E=16) -- keep MICROSTEP_B below in sync.
 ENDSTOP_B_PIN = 3
 
 # Enable pins on TMC2209-based boards are typically active-low (0 = driver
@@ -64,7 +64,7 @@ ENDSTOP_TRIGGERED_VALUE = 1
 # Update these if a motor moves ports.
 # ---------------------------------------------------------------------------
 MICROSTEP_A = 8   # motor A on X port
-MICROSTEP_B = 32  # motor B on Y port
+MICROSTEP_B = 16  # motor B on E0 port
 RATIO_B = MICROSTEP_B // MICROSTEP_A  # B pulses per A pulse for equal travel
 
 # ---------------------------------------------------------------------------
