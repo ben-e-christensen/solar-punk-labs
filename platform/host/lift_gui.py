@@ -481,6 +481,10 @@ class LiftGUI:
                 self.run_command("RAISE")
             else:
                 self.cycle_phase = None
+                if self.stress:
+                    self.log_line(
+                        f"STRESS TEST ABORTED by motion error after {self.stress_cycles} cycle(s)"
+                    )
                 self.stress = False
                 self.auto_var.set("Automation: off (cycle failed -- click BEGIN to restart)")
         elif phase == "raise" and command == "RAISE":
@@ -494,6 +498,10 @@ class LiftGUI:
                     self.log_line("cycle complete")
                     self.schedule_auto_cycle()
             else:
+                if self.stress:
+                    self.log_line(
+                        f"STRESS TEST ABORTED by motion error after {self.stress_cycles} cycle(s)"
+                    )
                 self.stress = False
                 self.auto_var.set("Automation: off (cycle failed -- click BEGIN to restart)")
 

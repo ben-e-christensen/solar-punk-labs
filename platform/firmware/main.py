@@ -89,7 +89,12 @@ RAISE_MAX_STEPS = 25000      # RAISE ends at the endstops OR this step cap,
                              # last-resort number, because the rig runs
                              # unattended for weeks at a time.
 JOG_STEPS = 50                # small bench-test move, ignores endstops entirely
-FULL_LOWER_STEPS = 25000     # LOWER_FULL travel. Tune to just UNDER a real
+FULL_LOWER_STEPS = 24000     # LOWER_FULL travel. Must stay comfortably under
+                             # RAISE_MAX_STEPS: the raise back up needs at
+                             # least this many steps, so equal values make the
+                             # raise hit the cap (ERROR HOMING_FAILED) right at
+                             # the endstops and park the stress test.
+                             # Tune to just UNDER a real
                              # full-travel raise count (read A=<n> off an
                              # OK RAISED reply after raising from the bottom):
                              # over-travel downward just stalls the motors

@@ -156,8 +156,15 @@ Operating workflow (all in `lift_gui.py`):
   first version used `LOWER` and visibly did nothing when the test was started with the
   platform already at the top (homing raise counted ~0 steps, so every cycle replayed ~0).
   Each segment still saves CSV/PNG like a normal cycle.
+  Known failure fixed 2026-08-15: with `FULL_LOWER_STEPS` == `RAISE_MAX_STEPS` (both
+  25000), the raise leg needed at least as many steps as the lower leg had just taken,
+  so it intermittently hit the step cap a hair below the endstops -> ERROR
+  HOMING_FAILED -> stress test silently disarmed right "at the endstops" (re-clicking
+  worked because the short re-homing raise succeeded). Fix: `FULL_LOWER_STEPS`
+  dropped to 24000 to leave margin under the cap, and the GUI now logs "STRESS TEST
+  ABORTED by motion error" whenever a stress cycle disarms on an error.
 - **LOWER_FULL** (firmware command + GUI "LOWER FULL" button, added 2026-08-15): lowers
-  both motors by `FULL_LOWER_STEPS` (25000, tune to just under a real full-travel raise
+  both motors by `FULL_LOWER_STEPS` (24000, tune to just under a real full-travel raise
   count) regardless of homed state -- recovery move so a desynced platform can be sent
   down without hand-cranking or power-cycling. Over-travel downward just skips steps and
   the next RAISE re-homes. Requires reflashing the firmware.
