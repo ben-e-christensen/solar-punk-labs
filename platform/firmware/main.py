@@ -71,9 +71,12 @@ RATIO_B = MICROSTEP_B // MICROSTEP_A  # B pulses per A pulse for equal travel
 # MOTION CONFIG - tune once the mechanism is running.
 # All step counts below are in motor-A pulses (8 microsteps each); motor B
 # automatically gets RATIO_B x as many pulses to travel the same distance.
+# Raise and lower speeds are independent knobs (smaller = faster). They are
+# deliberately separate constants, not derived from each other.
 # ---------------------------------------------------------------------------
-STEP_PULSE_US = 800          # time high and time low per step (speed knob)
-STEP_PULSE_B_US = STEP_PULSE_US // RATIO_B  # B pulses faster so speeds match
+RAISE_PULSE_US = 800         # time high and time low per step while homing up
+LOWER_PULSE_US = 400         # while lowering (currently 2x the raise speed)
+JOG_PULSE_US = 800           # bench-test jogs
 HOMING_TIMEOUT_STEPS = 25000  # safety cutoff if an endstop never triggers (LOWER_STEPS + margin)
 LOWER_STEPS = 20000          # distance from top (homed zero) to bottom
 JOG_STEPS = 50                # small bench-test move, ignores endstops entirely
@@ -117,19 +120,21 @@ def check_stop_requested():
     return stop_requested
 
 
-def step_once(step_pin, pulse_us=STEP_PULSE_US):
+def step_once(step_pin, pulse_us):
     step_pin.value(1)
     utime.sleep_us(pulse_us)
     step_pin.value(0)
     utime.sleep_us(pulse_us)
 
 
-def step_b_unit():
+def step_b_unit(pulse_us):
     """One motor-A-equivalent unit of travel on motor B: RATIO_B pulses at
     RATIO_B x the pulse rate, so both motors cover the same distance in the
-    same wall-clock time despite the Y port's finer hardwired microstepping."""
+    same wall-clock time despite the port's finer hardwired microstepping.
+    pulse_us is the motor-A pulse time for the current move."""
+    b_pulse = pulse_us // RATIO_B
     for _ in range(RATIO_B):
-        step_once(step_b, STEP_PULSE_B_US)
+        step_once(step_b, b_pulse)
 
 
 def home_both():
@@ -153,9 +158,9 @@ def home_both():
         if a_done and b_done:
             return True, True
         if not a_done:
-            step_once(step_a)
+            step_once(step_a, RAISE_PULSE_US)
         if not b_done:
-            step_b_unit()
+            step_b_unit(RAISE_PULSE_US)
     return a_done, b_done  # timed out - at least one never triggered
 
 
@@ -166,8 +171,8 @@ def lower_both(steps, dir_up_a, dir_up_b):
     for _ in range(steps):
         if check_stop_requested():
             return False
-        step_once(step_a)
-        step_b_unit()
+        step_once(step_a, LOWER_PULSE_US)
+        step_b_unit(LOWER_PULSE_US)
     return True
 
 
@@ -243,13 +248,13 @@ def main():
         elif cmd == "STATUS":
             cmd_status()
         elif cmd == "JOG_A_UP":
-            cmd_jog(step_a, dir_a, DIR_UP_A, JOG_STEPS, STEP_PULSE_US)
+            cmd_jog(step_a, dir_a, DIR_UP_A, JOG_STEPS, JOG_PULSE_US)
         elif cmd == "JOG_A_DOWN":
-            cmd_jog(step_a, dir_a, not DIR_UP_A, JOG_STEPS, STEP_PULSE_US)
+            cmd_jog(step_a, dir_a, not DIR_UP_A, JOG_STEPS, JOG_PULSE_US)
         elif cmd == "JOG_B_UP":
-            cmd_jog(step_b, dir_b, DIR_UP_B, JOG_STEPS * RATIO_B, STEP_PULSE_B_US)
+            cmd_jog(step_b, dir_b, DIR_UP_B, JOG_STEPS * RATIO_B, JOG_PULSE_US // RATIO_B)
         elif cmd == "JOG_B_DOWN":
-            cmd_jog(step_b, dir_b, not DIR_UP_B, JOG_STEPS * RATIO_B, STEP_PULSE_B_US)
+            cmd_jog(step_b, dir_b, not DIR_UP_B, JOG_STEPS * RATIO_B, JOG_PULSE_US // RATIO_B)
         elif cmd == "":
             continue
         else:

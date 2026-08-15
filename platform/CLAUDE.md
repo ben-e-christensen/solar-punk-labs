@@ -104,6 +104,31 @@ flashed):
    direction -> flip `DIR_UP_B` to 0.
 If E0 ever dies too, Z is the last spare output: MICROSTEP_B = 64 (RATIO_B becomes 8).
 
+RAISE and LOWER confirmed working on X + E0 (2026-08-14, after fixing a double direction
+inversion that made LOWER move upward).
+
+### Charge sensors / GUI (added 2026-08-14, sensors not yet wired)
+
+End goal: I2C charge sensors ride on the platform, wired to the Pi 5's I2C bus (not the Pico).
+Charge data only exists while the platform is moving, so the GUI shows readings only during a
+RAISE/LOWER.
+
+- `platform/host/charge_sensors.py` -- I2C readout via smbus2 (`pip install smbus2` in the
+  venv). `SENSOR_ADDRS` is an empty placeholder until the actual addresses are known (find
+  them with `i2cdetect -y 1`); `_read_one()` is a placeholder single-byte read until the real
+  sensor part/register map is known. Degrades gracefully (reports why) when unconfigured,
+  smbus2 missing, or the bus is absent, so the GUI runs fine on any machine.
+- `lift_gui.py` polls sensors every 500 ms while `self.moving` (a RAISE/LOWER in flight,
+  tracked by command send/reply) and shows "platform idle" otherwise.
+- Raise/lower speeds are independent firmware constants: `RAISE_PULSE_US` (800) and
+  `LOWER_PULSE_US` (400, currently 2x speed) -- deliberately NOT derived from each other, both
+  expected to be tuned. `JOG_PULSE_US` separate again.
+- GUI STOP button now stays enabled during motion (it used to be disabled with everything
+  else, so it could never abort). Mid-motion it sends STOP write-only on a second serial
+  handle; the blocked RAISE/LOWER worker still receives the "OK STOPPED" reply.
+- `lift_control.py` serial timeout raised 60s -> 180s: a full-travel RAISE (~80s) outlived the
+  old timeout, which silently desynced replies for every later command.
+
 There's also `platform/host/lift_gui.py` -- a tkinter GUI with RAISE/LOWER/STOP/STATUS buttons,
 a Jog panel (A/B, up/down, `JOG_STEPS` from firmware -- small bounded move that ignores
 endstops, for bench-testing DIR polarity without risking a full RAISE/LOWER), and a Reset Board

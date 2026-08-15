@@ -16,7 +16,9 @@ import serial
 
 PORT = "/dev/ttyACM0"
 BAUD = 115200
-TIMEOUT_S = 60  # RAISE/LOWER block until the BTT Pico finishes moving
+TIMEOUT_S = 180  # RAISE/LOWER block until the BTT Pico finishes moving; a
+# full-travel RAISE at 800us pulses is ~80s, so 60s silently timed out and
+# left the reply in the buffer to desync the next command.
 
 
 def send_command(command):

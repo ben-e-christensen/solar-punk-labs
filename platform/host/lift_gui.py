@@ -21,9 +21,11 @@ from tkinter import ttk
 
 import serial
 
+import charge_sensors
 import lift_control
 
 POLL_STATUS_SECONDS = 5
+POLL_SENSORS_MS = 500  # sensor readout rate while the platform is moving
 
 
 class LiftGUI:
@@ -33,6 +35,8 @@ class LiftGUI:
 
         self.result_queue = queue.Queue()
         self.busy = False
+        self.moving = False  # a RAISE/LOWER is in flight (charge data is live)
+        self.sensor_read_inflight = False
 
         main = ttk.Frame(root, padding=12)
         main.grid(sticky="nsew")
@@ -48,7 +52,7 @@ class LiftGUI:
         self.lower_btn = ttk.Button(main, text="LOWER", command=lambda: self.run_command("LOWER"))
         self.lower_btn.grid(row=1, column=1, sticky="ew", padx=2, pady=2)
 
-        self.stop_btn = ttk.Button(main, text="STOP", command=lambda: self.run_command("STOP"))
+        self.stop_btn = ttk.Button(main, text="STOP", command=self.stop_pressed)
         self.stop_btn.grid(row=2, column=0, sticky="ew", padx=2, pady=2)
 
         self.status_btn = ttk.Button(main, text="STATUS", command=lambda: self.run_command("STATUS"))
@@ -71,16 +75,27 @@ class LiftGUI:
 
         ttk.Separator(main).grid(row=7, column=0, columnspan=2, sticky="ew", pady=8)
 
+        ttk.Label(main, text="Charge sensors (live only while platform is moving)").grid(
+            row=8, column=0, columnspan=2, sticky="w"
+        )
+        self.sensor_var = tk.StringVar(value="platform idle")
+        ttk.Label(main, textvariable=self.sensor_var, font=("Courier", 11)).grid(
+            row=9, column=0, columnspan=2, sticky="w", padx=2, pady=(0, 4)
+        )
+
+        ttk.Separator(main).grid(row=10, column=0, columnspan=2, sticky="ew", pady=8)
+
         self.reset_btn = ttk.Button(main, text="Reset Board (fix stuck/unresponsive)", command=self.reset_board)
-        self.reset_btn.grid(row=8, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
+        self.reset_btn.grid(row=11, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
 
         self.log = tk.Text(main, width=50, height=14, state="disabled")
-        self.log.grid(row=9, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
+        self.log.grid(row=12, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
 
+        # STOP is intentionally NOT in this list: it must stay clickable
+        # while a RAISE/LOWER is in flight, or it can't abort anything.
         self.buttons = [
             self.raise_btn,
             self.lower_btn,
-            self.stop_btn,
             self.status_btn,
             self.jog_a_up_btn,
             self.jog_a_down_btn,
@@ -91,6 +106,7 @@ class LiftGUI:
 
         self.root.after(200, self.poll_queue)
         self.root.after(1000, self.auto_status)
+        self.root.after(POLL_SENSORS_MS, self.poll_sensors)
 
     def log_line(self, text):
         self.log.configure(state="normal")
@@ -108,6 +124,8 @@ class LiftGUI:
         if self.busy:
             return
         self.set_busy(True)
+        if command in ("RAISE", "LOWER"):
+            self.moving = True
         self.log_line(f"> {command}")
 
         def worker():
@@ -118,6 +136,45 @@ class LiftGUI:
             self.result_queue.put((command, reply))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def stop_pressed(self):
+        if not self.moving:
+            self.run_command("STOP")
+            return
+        # A RAISE/LOWER worker is blocked holding a serial read for its
+        # reply. Send STOP write-only on a second handle (Linux allows the
+        # port to be opened twice); the firmware picks it up mid-motion and
+        # the in-flight worker receives the "OK STOPPED" reply as usual.
+        self.log_line("> STOP (mid-motion)")
+
+        def worker():
+            try:
+                with serial.Serial(lift_control.PORT, lift_control.BAUD, timeout=2) as ser:
+                    ser.write(b"STOP\n")
+            except serial.SerialException as e:
+                self.result_queue.put(("STOP", f"ERROR CONNECTION: {e}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def poll_sensors(self):
+        if self.moving and not self.sensor_read_inflight:
+            self.sensor_read_inflight = True
+
+            def worker():
+                readings = charge_sensors.read_all()
+                if not readings:
+                    text = "moving -- no sensor addresses configured"
+                else:
+                    text = "   ".join(f"{k}: {v}" for k, v in readings.items())
+                # tkinter StringVar.set from a thread is tolerated, but route
+                # through `after` to stay on the main loop properly.
+                self.root.after(0, self.sensor_var.set, text)
+                self.sensor_read_inflight = False
+
+            threading.Thread(target=worker, daemon=True).start()
+        elif not self.moving:
+            self.sensor_var.set("platform idle")
+        self.root.after(POLL_SENSORS_MS, self.poll_sensors)
 
     def reset_board(self):
         if self.busy:
@@ -154,6 +211,8 @@ class LiftGUI:
             while True:
                 command, reply = self.result_queue.get_nowait()
                 self.log_line(f"< {reply}")
+                if command in ("RAISE", "LOWER"):
+                    self.moving = False
                 if command in ("STATUS", "RAISE", "LOWER"):
                     if "HOMED" in reply and "NOT_HOMED" not in reply:
                         self.status_var.set("Status: HOMED")
