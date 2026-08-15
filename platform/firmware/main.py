@@ -3,8 +3,10 @@ MicroPython firmware for the BTT Pico. Copy this file onto the board's
 filesystem as main.py (e.g. via Thonny or mpremote) so it runs on boot.
 
 Listens for line-delimited commands over USB serial (stdin/stdout):
-    RAISE   - home both motors independently against their top endstops
-    LOWER   - move both motors down a fixed step count from the homed zero
+    RAISE   - home both motors up until each hits its own top endstop,
+              counting each motor's steps; replies OK RAISED A=<n> B=<n>
+    LOWER   - replay the last RAISE's per-motor counts back downward, so
+              the platform returns to where that raise started
     STOP    - abort whatever RAISE/LOWER is in progress
     STATUS  - report homed state and current position
     JOG_A_UP / JOG_A_DOWN / JOG_B_UP / JOG_B_DOWN
@@ -77,8 +79,8 @@ RATIO_B = MICROSTEP_B // MICROSTEP_A  # B pulses per A pulse for equal travel
 RAISE_PULSE_US = 800         # time high and time low per step while homing up
 LOWER_PULSE_US = 400         # while lowering (currently 2x the raise speed)
 JOG_PULSE_US = 800           # bench-test jogs
-HOMING_TIMEOUT_STEPS = 25000  # safety cutoff if an endstop never triggers (LOWER_STEPS + margin)
-LOWER_STEPS = 20000          # distance from top (homed zero) to bottom
+RAISE_MAX_STEPS = 200000     # pure safety cap (broken endstop/wiring) -- RAISE
+                             # normally ends only when both endstops trigger
 JOG_STEPS = 50                # small bench-test move, ignores endstops entirely
 
 # ---------------------------------------------------------------------------
@@ -95,6 +97,12 @@ endstop_b = Pin(ENDSTOP_B_PIN, Pin.IN, Pin.PULL_DOWN)
 
 homed = False
 stop_requested = False
+# Per-motor step counts measured during the last successful RAISE; LOWER
+# replays exactly these back down so the platform returns to where the
+# raise started. Held in RAM only -- after a power cycle, RAISE (Begin)
+# re-homes and re-measures, so nothing needs to survive reboot.
+raise_steps_a = 0
+raise_steps_b = 0
 
 poller = select.poll()
 poller.register(sys.stdin, select.POLLIN)
@@ -139,51 +147,64 @@ def step_b_unit(pulse_us):
 
 def home_both():
     """Step both motors upward together, every iteration, each one
-    independently stopping the instant its own endstop triggers. Both
-    motors are rigidly connected to the same platform, so homing them
-    fully sequentially (one at a time) would rack the frame -- this keeps
-    any skew during homing bounded to whatever drift already existed,
-    rather than one motor's entire travel distance."""
+    independently stopping the instant its own endstop triggers, counting
+    each motor's steps so LOWER can replay them. Both motors are rigidly
+    connected to the same platform, so homing them fully sequentially (one
+    at a time) would rack the frame -- this keeps any skew during homing
+    bounded to whatever drift already existed. RAISE_MAX_STEPS is a pure
+    safety cap for a broken endstop, not a working travel limit.
+
+    Returns (a_done, b_done, count_a, count_b)."""
     dir_a.value(DIR_UP_A)
     dir_b.value(DIR_UP_B)
     a_done = False
     b_done = False
-    for _ in range(HOMING_TIMEOUT_STEPS):
+    count_a = 0
+    count_b = 0
+    for _ in range(RAISE_MAX_STEPS):
         if check_stop_requested():
-            return False, False
+            return False, False, count_a, count_b
         if not a_done and endstop_a.value() == ENDSTOP_TRIGGERED_VALUE:
             a_done = True
         if not b_done and endstop_b.value() == ENDSTOP_TRIGGERED_VALUE:
             b_done = True
         if a_done and b_done:
-            return True, True
+            return True, True, count_a, count_b
         if not a_done:
             step_once(step_a, RAISE_PULSE_US)
+            count_a += 1
         if not b_done:
             step_b_unit(RAISE_PULSE_US)
-    return a_done, b_done  # timed out - at least one never triggered
+            count_b += 1
+    return a_done, b_done, count_a, count_b  # hit safety cap
 
 
-def lower_both(steps, dir_up_a, dir_up_b):
-    """Step both motors downward together for a fixed count."""
-    dir_a.value(0 if dir_up_a else 1)
-    dir_b.value(0 if dir_up_b else 1)
-    for _ in range(steps):
+def lower_both(steps_a, steps_b):
+    """Step both motors downward together, each for its own count (the
+    counts measured during the last RAISE), so each screw returns exactly
+    to where its raise started."""
+    dir_a.value(0 if DIR_UP_A else 1)
+    dir_b.value(0 if DIR_UP_B else 1)
+    for i in range(max(steps_a, steps_b)):
         if check_stop_requested():
             return False
-        step_once(step_a, LOWER_PULSE_US)
-        step_b_unit(LOWER_PULSE_US)
+        if i < steps_a:
+            step_once(step_a, LOWER_PULSE_US)
+        if i < steps_b:
+            step_b_unit(LOWER_PULSE_US)
     return True
 
 
 def cmd_raise():
-    global homed, stop_requested
+    global homed, stop_requested, raise_steps_a, raise_steps_b
     stop_requested = False
     drivers_enable()
-    ok_a, ok_b = home_both()
+    ok_a, ok_b, count_a, count_b = home_both()
     if ok_a and ok_b:
         homed = True
-        print("OK RAISED")
+        raise_steps_a = count_a
+        raise_steps_b = count_b
+        print("OK RAISED A={} B={}".format(count_a, count_b))
     elif stop_requested:
         homed = False
         print("OK STOPPED")
@@ -193,18 +214,18 @@ def cmd_raise():
 
 
 def cmd_lower():
-    global stop_requested
+    global homed, stop_requested
     if not homed:
         print("ERROR NOT_HOMED")
         return
     stop_requested = False
     drivers_enable()
-    # lower_both() inverts internally (it takes the UP levels and sets the
-    # opposite), so pass DIR_UP_* as-is -- passing `not DIR_UP_*` here
-    # double-inverted and made LOWER move upward.
-    completed = lower_both(LOWER_STEPS, DIR_UP_A, DIR_UP_B)
+    completed = lower_both(raise_steps_a, raise_steps_b)
+    # Whatever happened, we're no longer at the homed top position; the
+    # next RAISE re-homes and re-measures the counts.
+    homed = False
     if completed:
-        print("OK LOWERED")
+        print("OK LOWERED A={} B={}".format(raise_steps_a, raise_steps_b))
     elif stop_requested:
         print("OK STOPPED")
     else:
@@ -212,7 +233,10 @@ def cmd_lower():
 
 
 def cmd_status():
-    print("HOMED" if homed else "NOT_HOMED")
+    if homed:
+        print("HOMED A={} B={}".format(raise_steps_a, raise_steps_b))
+    else:
+        print("NOT_HOMED")
 
 
 def cmd_jog(step_pin, dir_pin, dir_up, pulses, pulse_us):

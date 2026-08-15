@@ -107,25 +107,41 @@ If E0 ever dies too, Z is the last spare output: MICROSTEP_B = 64 (RATIO_B becom
 RAISE and LOWER confirmed working on X + E0 (2026-08-14, after fixing a double direction
 inversion that made LOWER move upward).
 
-### Charge sensors / GUI (added 2026-08-14, sensors not yet wired)
+### Charge sensors / automated cycling (reworked 2026-08-14, sensors not yet wired)
 
-End goal: I2C charge sensors ride on the platform, wired to the Pi 5's I2C bus (not the Pico).
-Charge data only exists while the platform is moving, so the GUI shows readings only during a
-RAISE/LOWER.
+End goal: two ADS1115 ADCs, one per electrometer, named **"roots"** and **"grounded_roots"**,
+ride on the platform and wire to the Pi 5's I2C bus (not the Pico). Charge data only exists
+while the platform is moving, so sampling happens ONLY during a RAISE/LOWER.
 
-- `platform/host/charge_sensors.py` -- I2C readout via smbus2 (`pip install smbus2` in the
-  venv). `SENSOR_ADDRS` is an empty placeholder until the actual addresses are known (find
-  them with `i2cdetect -y 1`); `_read_one()` is a placeholder single-byte read until the real
-  sensor part/register map is known. Degrades gracefully (reports why) when unconfigured,
-  smbus2 missing, or the bus is absent, so the GUI runs fine on any machine.
-- `lift_gui.py` polls sensors every 500 ms while `self.moving` (a RAISE/LOWER in flight,
-  tracked by command send/reply) and shows "platform idle" otherwise.
+Operating workflow (all in `lift_gui.py`):
+- Hand-crank the platform down, click **BEGIN**: raises until both endstops trigger (no fixed
+  step count -- the firmware counts each motor's steps on the way up). On success, automation
+  arms: a **CYCLE** (lower by the counted steps, then raise back to the endstops, re-counting)
+  fires every `CYCLE_INTERVAL_MIN` (30 min). The CYCLE button also fires one on demand;
+  **STOP** aborts motion and disarms automation (BEGIN re-arms).
+- Step counts live in Pico RAM (`raise_steps_a/b`, per motor since each stops on its own
+  endstop); every raise re-measures them, and a power cycle just needs BEGIN again. Replies
+  carry them: `OK RAISED A=<n> B=<n>` / `OK LOWERED ...`; `STATUS` -> `HOMED A=.. B=..`.
+  `RAISE_MAX_STEPS` (200000) is a pure broken-endstop safety cap, not a travel limit.
+- Sampling: 100 Hz (`SAMPLE_HZ`) from a dedicated thread per motion segment;
+  `charge_sensors.ContinuousSampler` puts the ADS1115s in continuous-conversion mode (860 SPS
+  internally) so each sample is one register read per sensor. Drops to 1 Hz when no sensor is
+  readable (unwired bench runs). After each segment: CSV + PNG saved to `platform/host/data/`
+  (`<timestamp>_<raise|lower>.{csv,png}`, columns timestamp / elapsed_s / roots_V /
+  grounded_roots_V) and one reusable graph window updates in place (no window-per-cycle spam).
+- `charge_sensors.py`: addresses default to 0x48 (roots) / 0x49 (grounded_roots) -- verify
+  with `i2cdetect -y 1` once wired and fix `SENSORS` if needed. AIN0 vs GND, +/-4.096 V FSR
+  (`_PGA_BITS`/`FSR_VOLTS` change together). Degrades gracefully (reports why per sensor) when
+  smbus2/bus/device is missing, so the GUI runs anywhere. `python3 charge_sensors.py` does a
+  one-shot smoke-test read.
+- Host deps in the venv: `pip install pyserial smbus2 matplotlib` (GUI runs without
+  matplotlib, just no graphs).
 - Raise/lower speeds are independent firmware constants: `RAISE_PULSE_US` (800) and
   `LOWER_PULSE_US` (400, currently 2x speed) -- deliberately NOT derived from each other, both
   expected to be tuned. `JOG_PULSE_US` separate again.
-- GUI STOP button now stays enabled during motion (it used to be disabled with everything
-  else, so it could never abort). Mid-motion it sends STOP write-only on a second serial
-  handle; the blocked RAISE/LOWER worker still receives the "OK STOPPED" reply.
+- GUI STOP button stays enabled during motion (it used to be disabled with everything else, so
+  it could never abort). Mid-motion it sends STOP write-only on a second serial handle; the
+  blocked RAISE/LOWER worker still receives the "OK STOPPED" reply.
 - `lift_control.py` serial timeout raised 60s -> 180s: a full-travel RAISE (~80s) outlived the
   old timeout, which silently desynced replies for every later command.
 
