@@ -415,26 +415,25 @@ class LiftGUI:
         if self.graph_window is None or not self.graph_window.winfo_exists():
             self.graph_window = tk.Toplevel(self.root)
             self.graph_window.title("Charge data")
-            self.graph_figure = Figure(figsize=(7, 4), dpi=100)
+            self.graph_figure = Figure(figsize=(8, 6), dpi=100)
             self.graph_canvas = FigureCanvasTkAgg(self.graph_figure, master=self.graph_window)
             self.graph_canvas.get_tk_widget().pack(fill="both", expand=True)
         fig = self.graph_figure
         fig.clear()
-        ax = fig.add_subplot(111)
-        plotted = False
-        for sensor, points in numeric.items():
+        colors = {"roots": "teal", "grounded_roots": "darkorange"}
+        axes = fig.subplots(len(numeric), 1, sharex=True)
+        for ax, (sensor, points) in zip(axes, numeric.items()):
             if points:
                 xs, ys = zip(*points)
-                ax.plot(xs, ys, label=sensor)
-                plotted = True
-        ax.set_xlabel("elapsed (s)")
-        ax.set_ylabel("voltage (V)")
-        ax.set_title(f"{name} @ {stamp}")
-        if plotted:
-            ax.legend()
-        else:
-            ax.text(0.5, 0.5, "no numeric sensor data\n(sensors unreadable this segment)",
-                    ha="center", va="center", transform=ax.transAxes)
+                ax.plot(xs, ys, lw=1.0, color=colors.get(sensor))
+            else:
+                ax.text(0.5, 0.5, "no numeric data this segment",
+                        ha="center", va="center", transform=ax.transAxes)
+            ax.set_title(sensor, fontsize=10, loc="left")
+            ax.set_ylabel("voltage (V)")
+            ax.grid(True, linestyle="--", alpha=0.6)
+        axes[-1].set_xlabel("elapsed (s)")
+        fig.suptitle(f"{name} @ {stamp}")
         fig.tight_layout()
         self.graph_canvas.draw()
         self.graph_window.lift()
