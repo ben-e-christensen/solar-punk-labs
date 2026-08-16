@@ -53,18 +53,29 @@ Relevant files:
   drift between the two screws every homing cycle, but bounds any skew during homing to
   whatever drift already existed rather than one motor's entire travel distance. LOWER already
   moved both motors together in lockstep.
-- **4 endstops, two per motor** (design changed 2026-08-15 from the earlier top-only plan):
-  tops on the X/Y endstop headers as before, bottoms on the Z-stop header (gpio25, motor A) and
-  E0-stop header (gpio16, motor B). RAISE runs up until each motor's top endstop triggers;
-  LOWER runs down until each motor's bottom endstop triggers. Both moves are **stateless** —
-  no counted-step replay, so nothing depends on remembered state and a desync self-corrects on
-  the next move in either direction. (The old scheme — lower by replaying the counted raise
-  steps — was fragile exactly because it was tied to an exact remembered count; it also had a
-  silent-no-op failure mode when BEGIN was clicked with the platform already at the top, so the
-  counted raise was ~0 and every cycle "moved" ~0 steps while reporting OK.)
-- The earlier warning about bottom endstops still holds in one respect: never wire two
-  active-high push-pull endstop outputs in parallel onto one header. Not an issue in the
-  current wiring — each of the 4 endstops has its own pin.
+- **2 endstops, one per motor, both at the top** (settled 2026-08-15 after a same-day detour
+  through bottom endstops). RAISE runs up until each motor's top endstop triggers — this
+  squares the platform at the top on every single raise. LOWER moves both motors down by the
+  **fixed** `FULL_LOWER_STEPS` count (24000): since the top just got squared and both sides
+  descend the same count, the bottom position is square by construction, no bottom sensing
+  needed. Both moves are stateless — no counted-step replay (the old replay scheme was fragile
+  because it depended on an exact remembered count, and silently no-opped when BEGIN started
+  with the platform already at the top: counted raise ~0, so every cycle "moved" ~0 while
+  reporting OK).
+- Bottom endstops were physically tried 2026-08-15 and removed the same day: the two sides
+  never trigger at exactly the same moment, and any sensing/wiring fault at the bottom rams
+  the frame; they also can't square anything the top endstops don't already square. Unplugged;
+  firmware support removed.
+- Sensorless (StallGuard) bottom homing was considered and parked: the SKR Pico's TMC2209
+  UART is hardwired to gpio8 (TX) / gpio9 (shared), addresses X=0 Z=1 Y=2 E0=3, so it needs no
+  wiring — but StallGuard requires writing SGTHRS (and current etc.) over that UART, which in
+  the other project Klipper did invisibly from the `[tmc2209 ...]` config sections (the DIAG
+  jumper only routes the driver's DIAG output onto its own port's endstop pin; jumper alone
+  does nothing in standalone mode since SGTHRS powers up at "never"). Doing it here means a
+  MicroPython TMC2209 UART driver — a real sub-project that would also unlock uniform
+  microstepping (killing the RATIO_B hack) and current control. Also lead screws are the worst
+  case for StallGuard (mechanical advantage hides the stall from the motor). Revisit only if
+  fixed-count lowering proves insufficient.
 - The "only 3 endstop headers" limitation isn't a hard constraint — those are just a labeled
   subset of GPIO with a convenient JST connector. A 4th endstop can be wired to any other spare
   3.3V-tolerant GPIO pin with loose wires instead of the pre-made connector.
@@ -119,28 +130,29 @@ while the platform is moving, so sampling happens ONLY during a RAISE/LOWER.
 
 Operating workflow (all in `lift_gui.py`):
 - Click **BEGIN** (any starting position, no hand-cranking needed since the stateless rework):
-  raises until both top endstops trigger. On success, automation arms: a **CYCLE** (lower to
-  the bottom endstops, raise back to the top endstops) fires every `CYCLE_INTERVAL_MIN`
-  (30 min). The CYCLE button also fires one on demand; **STOP** aborts motion and disarms
+  raises until both top endstops trigger. On success, automation arms: a **CYCLE** (lower by
+  `FULL_LOWER_STEPS`, raise back to the top endstops) fires every `CYCLE_INTERVAL_MIN`
+  (30 min). The CYCLE button also fires one on demand; **RAISE**/**LOWER** buttons run either
+  move individually without touching the automation; **STOP** aborts motion and disarms
   automation (BEGIN re-arms).
-- Every move is endstop-bounded AND step-capped: `RAISE_MAX_STEPS` / `LOWER_MAX_STEPS` (both
-  27000 as of 2026-08-15) end the move at the endstops OR the cap, whichever first. Caps kept
-  tight, not huge last-resort numbers, because the rig runs unattended for ~6 weeks;
-  cap-without-endstops = ERROR HOMING_FAILED / ERROR LOWER_FAILED, which disarms the automation
-  so a failed endstop parks the system instead of cycling blind. Step counts are still measured
-  and reported (`OK RAISED A=<n> B=<n>` / `OK LOWERED A=<n> B=<n>`; `STATUS` -> `HOMED A=..
-  B=..`) but they are telemetry only — nothing replays them.
-- **Lag guard** (`MAX_LAG_STEPS`, 2000, added 2026-08-15): once ONE motor has hit its endstop,
-  the other gets at most 2000 more steps before the move aborts with an error. The platform is
-  rigid, so the two sides can only be slightly out of sync — a side needing thousands more
-  steps means its endstop is dead/miswired, and continuing just rams and racks the frame
-  (which is what happened at the bottom before this guard: one bottom endstop wasn't being
-  seen, so that motor rammed the full 27k cap into the bottom and locked things up).
+- Every raise is endstop-bounded AND step-capped: `RAISE_MAX_STEPS` (27000) ends the move at
+  the endstops OR the cap, whichever first. Cap kept tight, not a huge last-resort number,
+  because the rig runs unattended for ~6 weeks; cap-without-endstops = ERROR HOMING_FAILED,
+  which disarms the automation so a failed endstop parks the system instead of cycling blind.
+  LOWER is a fixed count, so it's inherently bounded. Step counts are still measured and
+  reported on raises (`OK RAISED A=<n> B=<n>`; `STATUS` -> `HOMED A=.. B=..`) but they are
+  telemetry only — nothing replays them; use them to tune `FULL_LOWER_STEPS` to just under a
+  real full-travel raise (over-travel downward just skips steps harmlessly, and the next raise
+  re-homes anyway).
+- **Lag guard** (`MAX_LAG_STEPS`, 2000, added 2026-08-15): during a raise, once ONE motor has
+  hit its top endstop, the other gets at most 2000 more steps before the move aborts with
+  ERROR HOMING_FAILED. The platform is rigid, so the two sides can only be slightly out of
+  sync — a side needing thousands more steps means its endstop is dead/miswired, and
+  continuing just rams and racks the frame (learned at the bottom during the bottom-endstop
+  detour: an unseen endstop rammed the full cap and locked the mechanism).
 - **ENDSTOPS** (firmware command + GUI button next to the Jog panel): reports the live value
-  of all four endstop pins (`TOP_A= TOP_B= BOTTOM_A= BOTTOM_B=`). Hand-block each opto and
-  click it to verify wiring/pairing with zero motion — do this before trusting a LOWER after
-  any endstop rewiring. If blocking the A-side bottom opto flips `BOTTOM_B` (or vice versa),
-  swap `BOTTOM_ENDSTOP_A_PIN`/`BOTTOM_ENDSTOP_B_PIN` in the firmware.
+  of the top endstop pins (`TOP_A= TOP_B=`). Hand-block each opto and click it to verify
+  wiring with zero motion after any endstop rework.
 - Sampling: 100 Hz (`SAMPLE_HZ`) from a dedicated thread per motion segment;
   `charge_sensors.ContinuousSampler` puts the ADS1115s in continuous-conversion mode (860 SPS
   internally) so each sample is one register read per sensor. Drops to 1 Hz when no sensor is
@@ -164,17 +176,15 @@ Operating workflow (all in `lift_gui.py`):
 - `lift_control.py` serial timeout raised 60s -> 180s: a full-travel RAISE (~80s) outlived the
   old timeout, which silently desynced replies for every later command.
 
-- **BEGIN STRESS TEST** (GUI button): mechanical soak test while the rest of the build
+- **STRESS TEST** (GUI button): mechanical soak test while the rest of the build
   continues -- homes up like BEGIN, then runs lower+raise cycles back-to-back (1 s pause
   between cycles) until STOP or a motion error. Reuses the BEGIN/CYCLE state machine; since
-  the 2026-08-15 stateless rework its cycles are identical to normal ones (endstop-based
-  `LOWER`, no special-case `LOWER_FULL` leg needed anymore). Each segment still saves
-  CSV/PNG like a normal cycle, and the GUI logs "STRESS TEST ABORTED by motion error"
+  the 2026-08-15 stateless rework its cycles are identical to normal ones. Each segment still
+  saves CSV/PNG like a normal cycle, and the GUI logs "STRESS TEST ABORTED by motion error"
   whenever a stress cycle disarms on an error.
-- **LOWER_FULL** (firmware command + GUI "LOWER FULL" button): lowers both motors by
-  `FULL_LOWER_STEPS` (24000) IGNORING the bottom endstops -- recovery move for when a stuck
-  bottom endstop makes the endstop-based `LOWER` stop instantly. Over-travel downward just
-  skips steps and the next RAISE re-homes.
+- `LOWER_FULL` survives in the firmware only as a legacy alias for `LOWER` (they were separate
+  commands while `LOWER` was counted-replay); the GUI's LOWER FULL button was replaced by the
+  RAISE/LOWER buttons 2026-08-15.
 
 There's also `platform/host/lift_gui.py` -- a tkinter GUI with RAISE/LOWER/STOP/STATUS buttons,
 a Jog panel (A/B, up/down, `JOG_STEPS` from firmware -- small bounded move that ignores

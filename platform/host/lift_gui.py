@@ -4,18 +4,19 @@ GUI + automation for the Z-lift platform, run on the Raspberry Pi 5.
 Workflow (see CLAUDE.md):
   - BEGIN: raises until both top endstops trigger (works from any starting
     position), then arms the automation.
-  - CYCLE: lowers until both BOTTOM endstops trigger, then raises back to
-    the top endstops. Fully stateless -- both legs run to endstops, no
-    step-count memory. Runs automatically every CYCLE_INTERVAL_MIN minutes
-    once BEGIN has completed; the button also fires one on demand.
+  - CYCLE: lowers by the firmware's fixed FULL_LOWER_STEPS count, then
+    raises back to the top endstops. Stateless -- every raise re-squares
+    the platform at the top, so the fixed-count lower lands both sides at
+    the same bottom by construction (no bottom sensing). Runs automatically
+    every CYCLE_INTERVAL_MIN minutes once BEGIN has completed; the button
+    also fires one on demand.
+  - RAISE / LOWER: the same two moves individually, without touching the
+    automation (RAISE = up to the top endstops, LOWER = fixed count down).
   - STOP: aborts any motion immediately and cancels the automation
     (click BEGIN to re-home and restart it).
-  - BEGIN STRESS TEST: mechanical soak test -- homes up like BEGIN, then
-    runs lower+raise cycles back-to-back (1 s pause between) until STOP
-    or a motion error. Each segment still saves CSV/PNG data as usual.
-  - LOWER FULL: lower by the firmware's fixed FULL_LOWER_STEPS count,
-    IGNORING the bottom endstops -- recovery move for when a stuck bottom
-    endstop makes LOWER stop instantly.
+  - STRESS TEST: mechanical soak test -- homes up like BEGIN, then runs
+    lower+raise cycles back-to-back (1 s pause between) until STOP or a
+    motion error. Each segment still saves CSV/PNG data as usual.
 
 Charge data (two ADS1115 electrometer channels, "roots" and
 "grounded_roots") is sampled ONLY while the platform is moving, at
@@ -100,12 +101,12 @@ class LiftGUI:
         self.stop_btn = ttk.Button(main, text="STOP", command=self.stop_pressed)
         self.stop_btn.grid(row=2, column=2, sticky="ew", padx=2, pady=2)
 
-        self.stress_btn = ttk.Button(main, text="BEGIN STRESS TEST", command=self.stress_pressed)
-        self.stress_btn.grid(row=3, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
-        self.lower_full_btn = ttk.Button(
-            main, text="LOWER FULL", command=lambda: self.run_command("LOWER_FULL")
-        )
-        self.lower_full_btn.grid(row=3, column=2, sticky="ew", padx=2, pady=2)
+        self.raise_btn = ttk.Button(main, text="RAISE ▲", command=lambda: self.run_command("RAISE"))
+        self.raise_btn.grid(row=3, column=0, sticky="ew", padx=2, pady=2)
+        self.lower_btn = ttk.Button(main, text="LOWER ▼", command=lambda: self.run_command("LOWER"))
+        self.lower_btn.grid(row=3, column=1, sticky="ew", padx=2, pady=2)
+        self.stress_btn = ttk.Button(main, text="STRESS TEST", command=self.stress_pressed)
+        self.stress_btn.grid(row=3, column=2, sticky="ew", padx=2, pady=2)
 
         ttk.Separator(main).grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
 
@@ -146,8 +147,9 @@ class LiftGUI:
         self.buttons = [
             self.begin_btn,
             self.cycle_btn,
+            self.raise_btn,
+            self.lower_btn,
             self.stress_btn,
-            self.lower_full_btn,
             self.jog_a_up_btn,
             self.jog_a_down_btn,
             self.jog_b_up_btn,
@@ -182,7 +184,7 @@ class LiftGUI:
         if self.busy:
             return
         self.set_busy(True)
-        if command in ("RAISE", "LOWER", "LOWER_FULL"):
+        if command in ("RAISE", "LOWER"):
             self.start_segment("raise" if command == "RAISE" else "lower")
         self.log_line(f"> {command}")
 
@@ -437,9 +439,9 @@ class LiftGUI:
             while True:
                 command, reply = self.result_queue.get_nowait()
                 self.log_line(f"< {reply}")
-                if command in ("RAISE", "LOWER", "LOWER_FULL"):
+                if command in ("RAISE", "LOWER"):
                     self.finish_segment()
-                if command in ("STATUS", "RAISE", "LOWER", "LOWER_FULL"):
+                if command in ("STATUS", "RAISE", "LOWER"):
                     if "HOMED" in reply and "NOT_HOMED" not in reply:
                         self.status_var.set("Status: HOMED (raised)")
                     elif "NOT_HOMED" in reply:
@@ -470,7 +472,7 @@ class LiftGUI:
             else:
                 self.stress = False
                 self.auto_var.set("Automation: off (BEGIN failed -- fix and retry)")
-        elif phase == "lower" and command in ("LOWER", "LOWER_FULL"):
+        elif phase == "lower" and command == "LOWER":
             if ok:
                 self.cycle_phase = "raise"
                 self.log_line("cycle: raising...")
