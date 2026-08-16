@@ -53,14 +53,18 @@ Relevant files:
   drift between the two screws every homing cycle, but bounds any skew during homing to
   whatever drift already existed rather than one motor's entire travel distance. LOWER already
   moved both motors together in lockstep.
-- Minimum viable setup: **2 endstops, one per motor, both at the top.** Home upward on each motor
-  independently to re-zero; "lowered" position is reached via a software-defined step count
-  downward from that zero (no bottom endstop required — over-travel downward is less
-  catastrophic than crashing into the top).
-- Bottom endstops (if added) are a safety backstop only, not needed for sync correction — don't
-  wire two of them in parallel onto one BTT Pico endstop header (risks output contention between
-  two active-high push-pull signals); if used, give each its own spare GPIO and OR them in
-  firmware instead.
+- **4 endstops, two per motor** (design changed 2026-08-15 from the earlier top-only plan):
+  tops on the X/Y endstop headers as before, bottoms on the Z-stop header (gpio25, motor A) and
+  E0-stop header (gpio16, motor B). RAISE runs up until each motor's top endstop triggers;
+  LOWER runs down until each motor's bottom endstop triggers. Both moves are **stateless** —
+  no counted-step replay, so nothing depends on remembered state and a desync self-corrects on
+  the next move in either direction. (The old scheme — lower by replaying the counted raise
+  steps — was fragile exactly because it was tied to an exact remembered count; it also had a
+  silent-no-op failure mode when BEGIN was clicked with the platform already at the top, so the
+  counted raise was ~0 and every cycle "moved" ~0 steps while reporting OK.)
+- The earlier warning about bottom endstops still holds in one respect: never wire two
+  active-high push-pull endstop outputs in parallel onto one header. Not an issue in the
+  current wiring — each of the 4 endstops has its own pin.
 - The "only 3 endstop headers" limitation isn't a hard constraint — those are just a labeled
   subset of GPIO with a convenient JST connector. A 4th endstop can be wired to any other spare
   3.3V-tolerant GPIO pin with loose wires instead of the pre-made connector.
@@ -114,27 +118,27 @@ ride on the platform and wire to the Pi 5's I2C bus (not the Pico). Charge data 
 while the platform is moving, so sampling happens ONLY during a RAISE/LOWER.
 
 Operating workflow (all in `lift_gui.py`):
-- Hand-crank the platform down, click **BEGIN**: raises until both endstops trigger (no fixed
-  step count -- the firmware counts each motor's steps on the way up). On success, automation
-  arms: a **CYCLE** (lower by the counted steps, then raise back to the endstops, re-counting)
-  fires every `CYCLE_INTERVAL_MIN` (30 min). The CYCLE button also fires one on demand;
-  **STOP** aborts motion and disarms automation (BEGIN re-arms).
-- Step counts live in Pico RAM (`raise_steps_a/b`, per motor since each stops on its own
-  endstop); every raise re-measures them, and a power cycle just needs BEGIN again. Replies
-  carry them: `OK RAISED A=<n> B=<n>` / `OK LOWERED ...`; `STATUS` -> `HOMED A=.. B=..`.
-  `RAISE_MAX_STEPS` (25000) bounds every raise: endstop OR step cap, whichever first
-  (tightened back from a 200k last-resort cap 2026-08-14 because the rig runs unattended for
-  ~6 weeks; cap-without-endstops = ERROR HOMING_FAILED, which disarms the automation so a
-  failed endstop parks the system instead of cycling blind). LOWER replays the counted raise
-  steps, so it is inherently bounded by the same cap.
+- Click **BEGIN** (any starting position, no hand-cranking needed since the stateless rework):
+  raises until both top endstops trigger. On success, automation arms: a **CYCLE** (lower to
+  the bottom endstops, raise back to the top endstops) fires every `CYCLE_INTERVAL_MIN`
+  (30 min). The CYCLE button also fires one on demand; **STOP** aborts motion and disarms
+  automation (BEGIN re-arms).
+- Every move is endstop-bounded AND step-capped: `RAISE_MAX_STEPS` / `LOWER_MAX_STEPS` (both
+  27000 as of 2026-08-15) end the move at the endstops OR the cap, whichever first. Caps kept
+  tight, not huge last-resort numbers, because the rig runs unattended for ~6 weeks;
+  cap-without-endstops = ERROR HOMING_FAILED / ERROR LOWER_FAILED, which disarms the automation
+  so a failed endstop parks the system instead of cycling blind. Step counts are still measured
+  and reported (`OK RAISED A=<n> B=<n>` / `OK LOWERED A=<n> B=<n>`; `STATUS` -> `HOMED A=..
+  B=..`) but they are telemetry only — nothing replays them.
 - Sampling: 100 Hz (`SAMPLE_HZ`) from a dedicated thread per motion segment;
   `charge_sensors.ContinuousSampler` puts the ADS1115s in continuous-conversion mode (860 SPS
   internally) so each sample is one register read per sensor. Drops to 1 Hz when no sensor is
   readable (unwired bench runs). After each segment: CSV + PNG saved to `platform/host/data/`
   (`<timestamp>_<raise|lower>.{csv,png}`, columns timestamp / elapsed_s / roots_V /
   grounded_roots_V) and one reusable graph window updates in place (no window-per-cycle spam).
-- `charge_sensors.py`: addresses default to 0x48 (roots) / 0x49 (grounded_roots) -- verify
-  with `i2cdetect -y 1` once wired and fix `SENSORS` if needed. AIN0 vs GND, +/-4.096 V FSR
+- `charge_sensors.py`: addresses 0x48 (roots) / 0x49 (grounded_roots) -- confirmed against
+  the wired hardware 2026-08-15 (roots at 1001000b, grounded_roots at 1001001b), matching
+  the defaults, no change needed. AIN0 vs GND, +/-4.096 V FSR
   (`_PGA_BITS`/`FSR_VOLTS` change together). Degrades gracefully (reports why per sensor) when
   smbus2/bus/device is missing, so the GUI runs anywhere. `python3 charge_sensors.py` does a
   one-shot smoke-test read.
@@ -151,23 +155,15 @@ Operating workflow (all in `lift_gui.py`):
 
 - **BEGIN STRESS TEST** (GUI button): mechanical soak test while the rest of the build
   continues -- homes up like BEGIN, then runs lower+raise cycles back-to-back (1 s pause
-  between cycles) until STOP or a motion error. Reuses the BEGIN/CYCLE state machine, but
-  its lower leg sends `LOWER_FULL` (fixed count), NOT the counted-steps `LOWER` -- the
-  first version used `LOWER` and visibly did nothing when the test was started with the
-  platform already at the top (homing raise counted ~0 steps, so every cycle replayed ~0).
-  Each segment still saves CSV/PNG like a normal cycle.
-  Known failure fixed 2026-08-15: with `FULL_LOWER_STEPS` == `RAISE_MAX_STEPS` (both
-  25000), the raise leg needed at least as many steps as the lower leg had just taken,
-  so it intermittently hit the step cap a hair below the endstops -> ERROR
-  HOMING_FAILED -> stress test silently disarmed right "at the endstops" (re-clicking
-  worked because the short re-homing raise succeeded). Fix: `FULL_LOWER_STEPS`
-  dropped to 24000 to leave margin under the cap, and the GUI now logs "STRESS TEST
-  ABORTED by motion error" whenever a stress cycle disarms on an error.
-- **LOWER_FULL** (firmware command + GUI "LOWER FULL" button, added 2026-08-15): lowers
-  both motors by `FULL_LOWER_STEPS` (24000, tune to just under a real full-travel raise
-  count) regardless of homed state -- recovery move so a desynced platform can be sent
-  down without hand-cranking or power-cycling. Over-travel downward just skips steps and
-  the next RAISE re-homes. Requires reflashing the firmware.
+  between cycles) until STOP or a motion error. Reuses the BEGIN/CYCLE state machine; since
+  the 2026-08-15 stateless rework its cycles are identical to normal ones (endstop-based
+  `LOWER`, no special-case `LOWER_FULL` leg needed anymore). Each segment still saves
+  CSV/PNG like a normal cycle, and the GUI logs "STRESS TEST ABORTED by motion error"
+  whenever a stress cycle disarms on an error.
+- **LOWER_FULL** (firmware command + GUI "LOWER FULL" button): lowers both motors by
+  `FULL_LOWER_STEPS` (24000) IGNORING the bottom endstops -- recovery move for when a stuck
+  bottom endstop makes the endstop-based `LOWER` stop instantly. Over-travel downward just
+  skips steps and the next RAISE re-homes.
 
 There's also `platform/host/lift_gui.py` -- a tkinter GUI with RAISE/LOWER/STOP/STATUS buttons,
 a Jog panel (A/B, up/down, `JOG_STEPS` from firmware -- small bounded move that ignores

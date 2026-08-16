@@ -2,22 +2,20 @@
 GUI + automation for the Z-lift platform, run on the Raspberry Pi 5.
 
 Workflow (see CLAUDE.md):
-  - Hand-crank the platform down, then click BEGIN: raises until both
-    endstops trigger, counting each motor's steps.
-  - CYCLE: lowers by the counted steps, then raises back to the endstops
-    (re-measuring the counts). Runs automatically every CYCLE_INTERVAL_MIN
-    minutes once BEGIN has completed; the button also fires one on demand.
+  - BEGIN: raises until both top endstops trigger (works from any starting
+    position), then arms the automation.
+  - CYCLE: lowers until both BOTTOM endstops trigger, then raises back to
+    the top endstops. Fully stateless -- both legs run to endstops, no
+    step-count memory. Runs automatically every CYCLE_INTERVAL_MIN minutes
+    once BEGIN has completed; the button also fires one on demand.
   - STOP: aborts any motion immediately and cancels the automation
     (click BEGIN to re-home and restart it).
   - BEGIN STRESS TEST: mechanical soak test -- homes up like BEGIN, then
     runs lower+raise cycles back-to-back (1 s pause between) until STOP
-    or a motion error. The lower leg uses LOWER_FULL (fixed step count),
-    not the counted raise steps, so it works even when the test starts
-    with the platform already at the top. Each segment still saves
-    CSV/PNG data as usual.
+    or a motion error. Each segment still saves CSV/PNG data as usual.
   - LOWER FULL: lower by the firmware's fixed FULL_LOWER_STEPS count,
-    regardless of homed state -- recovery move so a desynced platform can
-    be sent down without hand-cranking or power-cycling.
+    IGNORING the bottom endstops -- recovery move for when a stuck bottom
+    endstop makes LOWER stop instantly.
 
 Charge data (two ADS1115 electrometer channels, "roots" and
 "grounded_roots") is sampled ONLY while the platform is moving, at
@@ -195,9 +193,8 @@ class LiftGUI:
         threading.Thread(target=worker, daemon=True).start()
 
     def begin_pressed(self):
-        """First raise of a session: platform was hand-cranked down; home up
-        to the endstops, measuring the step counts. On success, automation
-        starts."""
+        """First raise of a session: home up to the top endstops (works from
+        any starting position). On success, automation starts."""
         if self.busy:
             return
         self.cycle_phase = "begin"
@@ -233,11 +230,7 @@ class LiftGUI:
         self.cancel_auto_cycle()
         self.cycle_phase = "lower"
         self.log_line("cycle: lowering...")
-        # Stress cycles lower by the fixed FULL_LOWER_STEPS count instead of
-        # replaying the counted raise steps -- the counts are ~0 if the
-        # stress test's homing raise started with the platform already up,
-        # which made the whole cycle a visible no-op.
-        self.run_command("LOWER_FULL" if self.stress else "LOWER")
+        self.run_command("LOWER")
 
     def stop_pressed(self):
         self.cancel_auto_cycle()

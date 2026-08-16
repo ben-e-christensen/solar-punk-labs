@@ -16,7 +16,7 @@ z=3;
 
 shift=e_x/2-z/2-u_right;
 shift1=-e_x/2+z/2+u_left;
-module stop(height=in){
+module top_stop(height=in+10){
 difference(){
     union(){
         cube([e_x,e_y*2.5,z],center=true);
@@ -43,7 +43,25 @@ module bracket(){
         cylinder(150,m3,m3);
     }
 }
-stop();
-    
 
+module bottom_stop() {
+    difference(){
+        union(){
+            cube([40,40,3],center=true);
+            translate([0,0,45/2])
+            cube([40,2,45],center=true);
+        }
+        translate([10,-12.5,-5])
+        cylinder(100,2.6,2.6);
+        translate([-10,-12.5,-5])
+        cylinder(100,2.6,2.6);
+        translate([10,12.5,-5])
+        cylinder(100,2.6,2.6);
+        translate([-10,12.5,-5])
+        cylinder(100,2.6,2.6);
+        
+    }
+}
+    
+bottom_stop();
 

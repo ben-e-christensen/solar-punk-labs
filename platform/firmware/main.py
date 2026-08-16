@@ -5,11 +5,13 @@ filesystem as main.py (e.g. via Thonny or mpremote) so it runs on boot.
 Listens for line-delimited commands over USB serial (stdin/stdout):
     RAISE   - home both motors up until each hits its own top endstop,
               counting each motor's steps; replies OK RAISED A=<n> B=<n>
-    LOWER   - replay the last RAISE's per-motor counts back downward, so
-              the platform returns to where that raise started
+    LOWER   - lower both motors until each hits its own BOTTOM endstop,
+              counting steps; stateless (no homed requirement), capped at
+              LOWER_MAX_STEPS; replies OK LOWERED A=<n> B=<n>
     LOWER_FULL - lower both motors by the fixed FULL_LOWER_STEPS count,
-              regardless of homed state -- recovery/stress-test move so the
-              platform can be sent down without hand-cranking
+              IGNORING the bottom endstops -- recovery move for when a
+              bottom endstop is stuck triggered (which makes LOWER stop
+              instantly)
     STOP    - abort whatever RAISE/LOWER is in progress
     STATUS  - report homed state and current position
     JOG_A_UP / JOG_A_DOWN / JOG_B_UP / JOG_B_DOWN
@@ -18,9 +20,9 @@ Listens for line-delimited commands over USB serial (stdin/stdout):
               without the risk of a full RAISE/LOWER run
 
 Two motors ("A"/"B"), each with its own STEP/DIR/EN output and its own top
-endstop input. Both are rigidly connected to the same platform, so RAISE
-and LOWER always move them simultaneously (each stopping independently on
-its own endstop during RAISE) rather than one at a time -- see CLAUDE.md.
+and bottom endstop inputs. Both are rigidly connected to the same platform,
+so RAISE and LOWER always move them simultaneously (each stopping
+independently on its own endstop) rather than one at a time -- see CLAUDE.md.
 """
 
 from machine import Pin
@@ -43,6 +45,12 @@ STEP_B_PIN = 14  # E0 port -- Y driver output confirmed-ish dead 2026-08-14 (mot
 DIR_B_PIN = 13   # freely at idle while A holds). Ports have different hardwired standalone
 EN_B_PIN = 15    # microstepping (X=8 Y=32 Z=64 E=16) -- keep MICROSTEP_B below in sync.
 ENDSTOP_B_PIN = 3
+
+# Bottom endstops (added 2026-08-15): A on the Z-stop header (gpio25), B on
+# the E0-stop header (gpio16) -- pairing assumed, swap these two constants
+# if a bench JOG shows they're wired the other way around.
+BOTTOM_ENDSTOP_A_PIN = 25
+BOTTOM_ENDSTOP_B_PIN = 16
 
 # Enable pins on TMC2209-based boards are typically active-low (0 = driver
 # enabled). Flip if your board is the opposite.
@@ -82,25 +90,22 @@ RATIO_B = MICROSTEP_B // MICROSTEP_A  # B pulses per A pulse for equal travel
 RAISE_PULSE_US = 800         # time high and time low per step while homing up
 LOWER_PULSE_US = 400         # while lowering (currently 2x the raise speed)
 JOG_PULSE_US = 800           # bench-test jogs
-RAISE_MAX_STEPS = 25000      # RAISE ends at the endstops OR this step cap,
+RAISE_MAX_STEPS = 27000      # RAISE ends at the top endstops OR this cap,
                              # whichever comes first (cap-without-endstops
                              # reports ERROR HOMING_FAILED, which parks the
                              # GUI automation). Kept tight, not a huge
                              # last-resort number, because the rig runs
                              # unattended for weeks at a time.
+LOWER_MAX_STEPS = 27000      # same idea downward: LOWER ends at the bottom
+                             # endstops OR this cap (cap-without-endstops
+                             # reports ERROR LOWER_FAILED, parking the GUI
+                             # automation so a dead bottom endstop can't
+                             # grind the bottom every 30 min).
 JOG_STEPS = 50                # small bench-test move, ignores endstops entirely
-FULL_LOWER_STEPS = 24000     # LOWER_FULL travel. Must stay comfortably under
-                             # RAISE_MAX_STEPS: the raise back up needs at
-                             # least this many steps, so equal values make the
-                             # raise hit the cap (ERROR HOMING_FAILED) right at
-                             # the endstops and park the stress test.
-                             # Tune to just UNDER a real
-                             # full-travel raise count (read A=<n> off an
-                             # OK RAISED reply after raising from the bottom):
-                             # over-travel downward just stalls the motors
-                             # (skipped steps, no crash) and the next RAISE
-                             # re-homes to the endstops anyway, but grinding
-                             # the bottom every stress cycle is worth avoiding.
+FULL_LOWER_STEPS = 24000     # LOWER_FULL travel (recovery move, ignores the
+                             # bottom endstops). Over-travel downward just
+                             # stalls the motors (skipped steps, no crash)
+                             # and the next RAISE re-homes anyway.
 
 # ---------------------------------------------------------------------------
 
@@ -114,12 +119,14 @@ dir_b = Pin(DIR_B_PIN, Pin.OUT)
 en_b = Pin(EN_B_PIN, Pin.OUT)
 endstop_b = Pin(ENDSTOP_B_PIN, Pin.IN, Pin.PULL_DOWN)
 
+bottom_endstop_a = Pin(BOTTOM_ENDSTOP_A_PIN, Pin.IN, Pin.PULL_DOWN)
+bottom_endstop_b = Pin(BOTTOM_ENDSTOP_B_PIN, Pin.IN, Pin.PULL_DOWN)
+
 homed = False
 stop_requested = False
-# Per-motor step counts measured during the last successful RAISE; LOWER
-# replays exactly these back down so the platform returns to where the
-# raise started. Held in RAM only -- after a power cycle, RAISE (Begin)
-# re-homes and re-measures, so nothing needs to survive reboot.
+# Per-motor step counts measured during the last successful RAISE. Since
+# the bottom endstops were added (2026-08-15) these are telemetry only --
+# LOWER runs to its own endstops, nothing replays these counts.
 raise_steps_a = 0
 raise_steps_b = 0
 
@@ -166,8 +173,8 @@ def step_b_unit(pulse_us):
 
 def home_both():
     """Step both motors upward together, every iteration, each one
-    independently stopping the instant its own endstop triggers, counting
-    each motor's steps so LOWER can replay them. Both motors are rigidly
+    independently stopping the instant its own top endstop triggers,
+    counting each motor's steps. Both motors are rigidly
     connected to the same platform, so homing them fully sequentially (one
     at a time) would rack the frame -- this keeps any skew during homing
     bounded to whatever drift already existed. Motion is bounded by
@@ -198,19 +205,48 @@ def home_both():
     return a_done, b_done, count_a, count_b  # hit safety cap
 
 
-def lower_both(steps_a, steps_b):
-    """Step both motors downward together, each for its own count (the
-    counts measured during the last RAISE), so each screw returns exactly
-    to where its raise started."""
+def lower_both_to_endstops():
+    """Mirror image of home_both: step both motors downward together, each
+    one independently stopping the instant its own BOTTOM endstop triggers.
+    Stateless -- works from any starting position, no step-count memory.
+    Bounded by LOWER_MAX_STEPS: endstop OR cap, whichever comes first.
+
+    Returns (a_done, b_done, count_a, count_b)."""
     dir_a.value(0 if DIR_UP_A else 1)
     dir_b.value(0 if DIR_UP_B else 1)
-    for i in range(max(steps_a, steps_b)):
+    a_done = False
+    b_done = False
+    count_a = 0
+    count_b = 0
+    for _ in range(LOWER_MAX_STEPS):
+        if check_stop_requested():
+            return False, False, count_a, count_b
+        if not a_done and bottom_endstop_a.value() == ENDSTOP_TRIGGERED_VALUE:
+            a_done = True
+        if not b_done and bottom_endstop_b.value() == ENDSTOP_TRIGGERED_VALUE:
+            b_done = True
+        if a_done and b_done:
+            return True, True, count_a, count_b
+        if not a_done:
+            step_once(step_a, LOWER_PULSE_US)
+            count_a += 1
+        if not b_done:
+            step_b_unit(LOWER_PULSE_US)
+            count_b += 1
+    return a_done, b_done, count_a, count_b  # hit safety cap
+
+
+def lower_both_fixed(steps):
+    """Step both motors downward together for a fixed count, IGNORING the
+    bottom endstops -- LOWER_FULL's recovery path for when a bottom endstop
+    is stuck triggered (which makes the endstop-based LOWER stop instantly)."""
+    dir_a.value(0 if DIR_UP_A else 1)
+    dir_b.value(0 if DIR_UP_B else 1)
+    for _ in range(steps):
         if check_stop_requested():
             return False
-        if i < steps_a:
-            step_once(step_a, LOWER_PULSE_US)
-        if i < steps_b:
-            step_b_unit(LOWER_PULSE_US)
+        step_once(step_a, LOWER_PULSE_US)
+        step_b_unit(LOWER_PULSE_US)
     return True
 
 
@@ -234,17 +270,14 @@ def cmd_raise():
 
 def cmd_lower():
     global homed, stop_requested
-    if not homed:
-        print("ERROR NOT_HOMED")
-        return
     stop_requested = False
     drivers_enable()
-    completed = lower_both(raise_steps_a, raise_steps_b)
+    ok_a, ok_b, count_a, count_b = lower_both_to_endstops()
     # Whatever happened, we're no longer at the homed top position; the
     # next RAISE re-homes and re-measures the counts.
     homed = False
-    if completed:
-        print("OK LOWERED A={} B={}".format(raise_steps_a, raise_steps_b))
+    if ok_a and ok_b:
+        print("OK LOWERED A={} B={}".format(count_a, count_b))
     elif stop_requested:
         print("OK STOPPED")
     else:
@@ -252,14 +285,13 @@ def cmd_lower():
 
 
 def cmd_lower_full():
-    """Fixed-count lower, no homed-state requirement: for getting the
-    platform back down after an error/desync without hand-cranking, and for
-    the GUI stress test's lower leg (which must not depend on the counted
-    raise steps -- those are ~0 if the raise started at the top)."""
+    """Fixed-count lower ignoring the bottom endstops: recovery move for
+    when a bottom endstop is stuck triggered (which makes LOWER stop
+    instantly). Over-travel downward just skips steps."""
     global homed, stop_requested
     stop_requested = False
     drivers_enable()
-    completed = lower_both(FULL_LOWER_STEPS, FULL_LOWER_STEPS)
+    completed = lower_both_fixed(FULL_LOWER_STEPS)
     homed = False
     if completed:
         print("OK LOWERED_FULL {}".format(FULL_LOWER_STEPS))
