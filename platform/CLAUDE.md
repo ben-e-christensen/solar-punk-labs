@@ -130,6 +130,17 @@ Operating workflow (all in `lift_gui.py`):
   so a failed endstop parks the system instead of cycling blind. Step counts are still measured
   and reported (`OK RAISED A=<n> B=<n>` / `OK LOWERED A=<n> B=<n>`; `STATUS` -> `HOMED A=..
   B=..`) but they are telemetry only — nothing replays them.
+- **Lag guard** (`MAX_LAG_STEPS`, 2000, added 2026-08-15): once ONE motor has hit its endstop,
+  the other gets at most 2000 more steps before the move aborts with an error. The platform is
+  rigid, so the two sides can only be slightly out of sync — a side needing thousands more
+  steps means its endstop is dead/miswired, and continuing just rams and racks the frame
+  (which is what happened at the bottom before this guard: one bottom endstop wasn't being
+  seen, so that motor rammed the full 27k cap into the bottom and locked things up).
+- **ENDSTOPS** (firmware command + GUI button next to the Jog panel): reports the live value
+  of all four endstop pins (`TOP_A= TOP_B= BOTTOM_A= BOTTOM_B=`). Hand-block each opto and
+  click it to verify wiring/pairing with zero motion — do this before trusting a LOWER after
+  any endstop rewiring. If blocking the A-side bottom opto flips `BOTTOM_B` (or vice versa),
+  swap `BOTTOM_ENDSTOP_A_PIN`/`BOTTOM_ENDSTOP_B_PIN` in the firmware.
 - Sampling: 100 Hz (`SAMPLE_HZ`) from a dedicated thread per motion segment;
   `charge_sensors.ContinuousSampler` puts the ADS1115s in continuous-conversion mode (860 SPS
   internally) so each sample is one register read per sensor. Drops to 1 Hz when no sensor is

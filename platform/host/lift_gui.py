@@ -120,6 +120,8 @@ class LiftGUI:
         self.jog_b_up_btn.grid(row=6, column=1, sticky="ew", padx=2, pady=2)
         self.jog_b_down_btn = ttk.Button(main, text="B ▼", command=lambda: self.run_command("JOG_B_DOWN"))
         self.jog_b_down_btn.grid(row=7, column=1, sticky="ew", padx=2, pady=2)
+        self.endstops_btn = ttk.Button(main, text="ENDSTOPS", command=lambda: self.run_command("ENDSTOPS"))
+        self.endstops_btn.grid(row=6, column=2, rowspan=2, sticky="nsew", padx=2, pady=2)
 
         ttk.Separator(main).grid(row=8, column=0, columnspan=3, sticky="ew", pady=8)
 
@@ -150,6 +152,7 @@ class LiftGUI:
             self.jog_a_down_btn,
             self.jog_b_up_btn,
             self.jog_b_down_btn,
+            self.endstops_btn,
             self.reset_btn,
         ]
 

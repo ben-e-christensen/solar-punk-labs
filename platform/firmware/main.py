@@ -14,6 +14,9 @@ Listens for line-delimited commands over USB serial (stdin/stdout):
               instantly)
     STOP    - abort whatever RAISE/LOWER is in progress
     STATUS  - report homed state and current position
+    ENDSTOPS - report the live value of all four endstop pins (hand-block
+              each opto and watch the value flip to verify wiring/pairing
+              without any motion)
     JOG_A_UP / JOG_A_DOWN / JOG_B_UP / JOG_B_DOWN
             - move one motor a small fixed step count (JOG_STEPS), ignores
               endstops/homed state entirely -- for bench-testing DIR polarity
@@ -102,6 +105,15 @@ LOWER_MAX_STEPS = 27000      # same idea downward: LOWER ends at the bottom
                              # automation so a dead bottom endstop can't
                              # grind the bottom every 30 min).
 JOG_STEPS = 50                # small bench-test move, ignores endstops entirely
+MAX_LAG_STEPS = 2000         # rigid-platform guard: once ONE motor has hit its
+                             # endstop, the other may run at most this many
+                             # more steps before the move aborts with an
+                             # error. The platform is rigid, so the two sides
+                             # can only be slightly out of sync -- if one side
+                             # needs thousands more steps, its endstop is
+                             # dead/miswired and continuing just rams and
+                             # racks the frame (this replaced ramming the
+                             # full step cap, seen 2026-08-15 at the bottom).
 FULL_LOWER_STEPS = 24000     # LOWER_FULL travel (recovery move, ignores the
                              # bottom endstops). Over-travel downward just
                              # stalls the motors (skipped steps, no crash)
@@ -187,6 +199,7 @@ def home_both():
     b_done = False
     count_a = 0
     count_b = 0
+    lag = 0
     for _ in range(RAISE_MAX_STEPS):
         if check_stop_requested():
             return False, False, count_a, count_b
@@ -196,6 +209,10 @@ def home_both():
             b_done = True
         if a_done and b_done:
             return True, True, count_a, count_b
+        if a_done or b_done:
+            lag += 1
+            if lag > MAX_LAG_STEPS:
+                return a_done, b_done, count_a, count_b  # other endstop dead?
         if not a_done:
             step_once(step_a, RAISE_PULSE_US)
             count_a += 1
@@ -218,6 +235,7 @@ def lower_both_to_endstops():
     b_done = False
     count_a = 0
     count_b = 0
+    lag = 0
     for _ in range(LOWER_MAX_STEPS):
         if check_stop_requested():
             return False, False, count_a, count_b
@@ -227,6 +245,10 @@ def lower_both_to_endstops():
             b_done = True
         if a_done and b_done:
             return True, True, count_a, count_b
+        if a_done or b_done:
+            lag += 1
+            if lag > MAX_LAG_STEPS:
+                return a_done, b_done, count_a, count_b  # other endstop dead?
         if not a_done:
             step_once(step_a, LOWER_PULSE_US)
             count_a += 1
@@ -342,6 +364,10 @@ def main():
             print("OK IDLE")  # nothing running; STOP mid-motion is handled inline
         elif cmd == "STATUS":
             cmd_status()
+        elif cmd == "ENDSTOPS":
+            print("TOP_A={} TOP_B={} BOTTOM_A={} BOTTOM_B={}".format(
+                endstop_a.value(), endstop_b.value(),
+                bottom_endstop_a.value(), bottom_endstop_b.value()))
         elif cmd == "JOG_A_UP":
             cmd_jog(step_a, dir_a, DIR_UP_A, JOG_STEPS, JOG_PULSE_US)
         elif cmd == "JOG_A_DOWN":
