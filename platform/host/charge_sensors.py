@@ -6,8 +6,9 @@ per electrometer, ride on the platform and wire back to the Pi's I2C bus:
     "grounded_roots" -> ADDR pin to VDD  -> 0x49
 
 If i2cdetect -y 1 shows different addresses once wired, just fix SENSORS
-below. Each reading is a single-shot conversion of AIN0 vs GND at the
-FSR set by PGA below.
+below. Each reading is a conversion of AIN0 vs GND at the FSR set by PGA
+below, then de-scaled through the INA159 front-end transform (see
+INA159_GAIN/INA159_OFFSET_V) so values are real electrometer volts.
 
 Requires smbus2 on the Pi:  pip install smbus2
 (Enable I2C via raspi-config if /dev/i2c-1 doesn't exist.)
@@ -35,6 +36,14 @@ _REG_CONFIG = 0x01
 #                                011=±1.024  100=±0.512  101..=±0.256
 _PGA_BITS = 0b001
 FSR_VOLTS = 4.096
+
+# INA159 front end: each electrometer feeds the ADS1115 through an INA159,
+# which divides the real signal by 5 and level-shifts it so 0 V in reads
+# 1.25 V at the ADC. Undo that here so every reported value is the actual
+# electrometer voltage (same math as the standalone live-monitor script
+# for this circuit: 5.0 * (adc_volts - 1.25)).
+INA159_GAIN = 5.0
+INA159_OFFSET_V = 1.25
 
 # Common config bits: MUX=100 (AIN0 vs GND), PGA as above, DR=111
 # (860 SPS), comparator disabled.
@@ -66,7 +75,8 @@ def _swap16(word):
 def _to_volts(raw):
     if raw > 0x7FFF:
         raw -= 0x10000  # two's complement
-    return raw * FSR_VOLTS / 32768.0
+    adc_volts = raw * FSR_VOLTS / 32768.0
+    return INA159_GAIN * (adc_volts - INA159_OFFSET_V)
 
 
 class ContinuousSampler:

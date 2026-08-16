@@ -167,7 +167,11 @@ Operating workflow (all in `lift_gui.py`):
   the 1 Hz fallback signature -- check that log line, not the sampling code.
 - `charge_sensors.py`: addresses 0x48 (roots) / 0x49 (grounded_roots) -- confirmed against
   the wired hardware 2026-08-15 (roots at 1001000b, grounded_roots at 1001001b), matching
-  the defaults, no change needed. AIN0 vs GND, +/-4.096 V FSR
+  the defaults, no change needed. The circuit has an **INA159** between each electrometer and
+  its ADS1115 (divide-by-5 + level shift so 0 V in reads 1.25 V at the ADC); readings are
+  de-scaled via `5.0 * (adc_volts - 1.25)` (`INA159_GAIN`/`INA159_OFFSET_V`) so all reported/
+  logged values are real electrometer volts (~-6.2 V to +14 V representable). Added 2026-08-15
+  after raw ADC volts made the data look shifted/squished vs the standalone monitor script. AIN0 vs GND, +/-4.096 V FSR
   (`_PGA_BITS`/`FSR_VOLTS` change together). Degrades gracefully (reports why per sensor) when
   smbus2/bus/device is missing, so the GUI runs anywhere. `python3 charge_sensors.py` does a
   one-shot smoke-test read.
