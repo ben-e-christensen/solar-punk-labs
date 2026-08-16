@@ -157,8 +157,14 @@ Operating workflow (all in `lift_gui.py`):
   `charge_sensors.ContinuousSampler` puts the ADS1115s in continuous-conversion mode (860 SPS
   internally) so each sample is one register read per sensor. Drops to 1 Hz when no sensor is
   readable (unwired bench runs). After each segment: CSV + PNG saved to `platform/host/data/`
-  (`<timestamp>_<raise|lower>.{csv,png}`, columns timestamp / elapsed_s / roots_V /
-  grounded_roots_V) and one reusable graph window updates in place (no window-per-cycle spam).
+  (`<timestamp>_<raise|lower>.{csv,png}`, columns timestamp / elapsed_s / segment / roots_V /
+  grounded_roots_V; segment repeats raise|lower per row for easy multi-file concatenation) and
+  one reusable graph window updates in place (no window-per-cycle spam). BOTH legs save --
+  raise files exist too, look for `_raise` names. When the sampler can't configure any sensor
+  it falls back to 1 Hz and (since 2026-08-15) logs a WARNING line with the exact reason
+  (smbus2 missing / bus unavailable / per-sensor config errors) instead of degrading silently;
+  it upgrades to 100 Hz mid-segment if readings start arriving. A ~46-samples-per-lower CSV is
+  the 1 Hz fallback signature -- check that log line, not the sampling code.
 - `charge_sensors.py`: addresses 0x48 (roots) / 0x49 (grounded_roots) -- confirmed against
   the wired hardware 2026-08-15 (roots at 1001000b, grounded_roots at 1001001b), matching
   the defaults, no change needed. AIN0 vs GND, +/-4.096 V FSR
@@ -167,9 +173,9 @@ Operating workflow (all in `lift_gui.py`):
   one-shot smoke-test read.
 - Host deps in the venv: `pip install pyserial smbus2 matplotlib` (GUI runs without
   matplotlib, just no graphs).
-- Raise/lower speeds are independent firmware constants: `RAISE_PULSE_US` (800) and
-  `LOWER_PULSE_US` (400, currently 2x speed) -- deliberately NOT derived from each other, both
-  expected to be tuned. `JOG_PULSE_US` separate again.
+- Speeds: `RAISE_PULSE_US` (800) sets the raise; lower is derived as
+  `RAISE_PULSE_US // LOWER_SPEED_MULT` (`LOWER_SPEED_MULT` = 3 as of 2026-08-15 -- the one
+  knob for lowering speed; was independent constants at 2x before). `JOG_PULSE_US` separate.
 - GUI STOP button stays enabled during motion (it used to be disabled with everything else, so
   it could never abort). Mid-motion it sends STOP write-only on a second serial handle; the
   blocked RAISE/LOWER worker still receives the "OK STOPPED" reply.

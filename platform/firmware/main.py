@@ -80,11 +80,14 @@ RATIO_B = MICROSTEP_B // MICROSTEP_A  # B pulses per A pulse for equal travel
 # MOTION CONFIG - tune once the mechanism is running.
 # All step counts below are in motor-A pulses (8 microsteps each); motor B
 # automatically gets RATIO_B x as many pulses to travel the same distance.
-# Raise and lower speeds are independent knobs (smaller = faster). They are
-# deliberately separate constants, not derived from each other.
+# Raise speed is set by RAISE_PULSE_US (smaller = faster); lower speed is
+# derived from it via LOWER_SPEED_MULT (changed 2026-08-15 from independent
+# constants to a single easy multiplier knob).
 # ---------------------------------------------------------------------------
 RAISE_PULSE_US = 800         # time high and time low per step while homing up
-LOWER_PULSE_US = 400         # while lowering (currently 2x the raise speed)
+LOWER_SPEED_MULT = 3         # lower runs this many times faster than raise --
+                             # the one knob to change lowering speed
+LOWER_PULSE_US = RAISE_PULSE_US // LOWER_SPEED_MULT
 JOG_PULSE_US = 800           # bench-test jogs
 RAISE_MAX_STEPS = 27000      # RAISE ends at the top endstops OR this cap,
                              # whichever comes first (cap-without-endstops

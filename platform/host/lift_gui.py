@@ -331,13 +331,29 @@ class LiftGUI:
         unwired bench run doesn't log thousands of error rows."""
         sampler = charge_sensors.ContinuousSampler()
         sampler.start()
-        period = 1.0 / SAMPLE_HZ if sampler.ok else 1.0
+        fast = sampler.ok
+        if not fast:
+            why = sampler.bus_error or "; ".join(
+                f"{k}: {v}" for k, v in sampler.dead.items()
+            ) or "no sensor readable"
+            self.root.after(
+                0, self.log_line,
+                f"WARNING sampling at 1 Hz fallback, not {SAMPLE_HZ} Hz: {why}",
+            )
+        period = 1.0 / SAMPLE_HZ if fast else 1.0
         next_t = time.monotonic()
         try:
             while self.moving and self.segment_samples is samples:
                 now = time.time()
                 readings = sampler.read()
                 samples.append((now - started, now, readings))
+                if not fast and any(isinstance(v, float) for v in readings.values()):
+                    fast = True
+                    period = 1.0 / SAMPLE_HZ
+                    self.root.after(
+                        0, self.log_line,
+                        f"sensor data detected -- sampling at {SAMPLE_HZ} Hz",
+                    )
                 if len(samples) % max(1, int(SAMPLE_HZ / 4)) == 1:
                     text = "   ".join(
                         f"{k}: {v:.4f} V" if isinstance(v, float) else f"{k}: {v}"
@@ -368,12 +384,13 @@ class LiftGUI:
             DATA_DIR.mkdir(exist_ok=True)
             with open(base.with_suffix(".csv"), "w", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow(["timestamp", "elapsed_s", "roots_V", "grounded_roots_V"])
+                writer.writerow(["timestamp", "elapsed_s", "segment", "roots_V", "grounded_roots_V"])
                 for elapsed, wall, readings in samples:
                     writer.writerow([
                         time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(wall))
                         + f".{int((wall % 1) * 1000):03d}",
                         f"{elapsed:.3f}",
+                        name,
                         readings.get("roots", ""),
                         readings.get("grounded_roots", ""),
                     ])
