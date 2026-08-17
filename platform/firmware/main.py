@@ -85,7 +85,7 @@ RATIO_B = MICROSTEP_B // MICROSTEP_A  # B pulses per A pulse for equal travel
 # constants to a single easy multiplier knob).
 # ---------------------------------------------------------------------------
 RAISE_PULSE_US = 800         # time high and time low per step while homing up
-LOWER_SPEED_MULT = 3         # lower runs this many times faster than raise --
+LOWER_SPEED_MULT = 5         # lower runs this many times faster than raise --
                              # the one knob to change lowering speed
 LOWER_PULSE_US = RAISE_PULSE_US // LOWER_SPEED_MULT
 JOG_PULSE_US = 800           # bench-test jogs
