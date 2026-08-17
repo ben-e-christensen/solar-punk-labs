@@ -16,12 +16,12 @@ z=3;
 
 shift=e_x/2-z/2-u_right;
 shift1=-e_x/2+z/2+u_left;
-module top_stop(height=in+10){
+module top_stop(move=1,height=in+10){
 difference(){
     union(){
         cube([e_x,e_y*2.5,z],center=true);
-        translate([shift,0,height/2+z/2])
-        cube([z-.5,e_y*2.5,height],center=true);
+        translate([shift+move,0,height/2+z/2])
+        cube([1.75,e_y*2.5,height],center=true);
 //        translate([shift1,e_y,height/2+z/2])
 //        cube([z,e_y,height],center=true);
     }
@@ -63,5 +63,5 @@ module bottom_stop() {
     }
 }
     
-bottom_stop();
+top_stop(1);
 

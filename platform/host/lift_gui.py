@@ -24,7 +24,7 @@ SAMPLE_HZ (100 Hz; the ADCs run in continuous-conversion mode so each
 sample is one register read). After every raise/lower segment the samples are written
 to data/<timestamp>_<segment>.csv, plotted to a matching .png, and shown
 in a single reusable graph window (updated in place rather than opening a
-new window per segment, so the 30-minute automation doesn't accumulate
+new window per segment, so the recurring automation doesn't accumulate
 windows).
 
 Also includes the Jog bench-test panel and the Reset Board button (fixes a
@@ -50,7 +50,7 @@ import lift_control
 
 POLL_STATUS_SECONDS = 5
 SAMPLE_HZ = 100            # sensor sample rate while the platform is moving
-CYCLE_INTERVAL_MIN = 30    # automated lower+raise cycle period
+CYCLE_INTERVAL_MIN = 120   # automated lower+raise cycle period
 DATA_DIR = pathlib.Path(__file__).resolve().parent / "data"
 
 try:

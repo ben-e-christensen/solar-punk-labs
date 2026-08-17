@@ -132,7 +132,7 @@ Operating workflow (all in `lift_gui.py`):
 - Click **BEGIN** (any starting position, no hand-cranking needed since the stateless rework):
   raises until both top endstops trigger. On success, automation arms: a **CYCLE** (lower by
   `FULL_LOWER_STEPS`, raise back to the top endstops) fires every `CYCLE_INTERVAL_MIN`
-  (30 min). The CYCLE button also fires one on demand; **RAISE**/**LOWER** buttons run either
+  (120 min). The CYCLE button also fires one on demand; **RAISE**/**LOWER** buttons run either
   move individually without touching the automation; **STOP** aborts motion and disarms
   automation (BEGIN re-arms).
 - Every raise is endstop-bounded AND step-capped: `RAISE_MAX_STEPS` (27000) ends the move at
